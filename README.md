@@ -7,7 +7,7 @@
 **[点这里下载 ModManager.exe](https://github.com/white12666/StudentAgeModManager/releases/latest/download/ModManager.exe)**（约 44KB）
 
 - 无需安装，下载后直接双击运行（Win10 / Win11）
-- 放在哪里都行，工具会自动找到游戏目录（放游戏目录里最稳）
+- 放在哪里都行，工具会自动找到游戏目录
 
 ## 🚀 使用方法
 
