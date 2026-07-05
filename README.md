@@ -1,48 +1,61 @@
 # StudentAge Mod 管理器
 
-一个 exe 搞定所有 StudentAge mod 的下载、更新、启用/禁用、卸载。
+一个小工具搞定《学生时代》所有 Mod 的**下载、更新、启用/禁用、卸载**，不用再手动复制文件。
 
-## 用户使用方式
+## 📥 下载
 
-1. 下载 `ModManager.exe`（约 43KB，无需安装任何运行时，Win10/11 直接双击）
-2. 放在任意位置运行（放游戏目录最稳，工具也会自动通过 Steam 找游戏目录）
-3. 界面里点「安装」/「更新」即可；改动需重启游戏生效
+**[点这里下载 ModManager.exe](https://github.com/white12666/StudentAgeModManager/releases/latest/download/ModManager.exe)**（约 44KB）
 
-## 架构
+- 无需安装，下载后直接双击运行（Win10 / Win11）
+- 放在哪里都行，工具会自动找到游戏目录（放游戏目录里最稳）
 
-```
-[中央索引仓库 mods.json] ← 作者发版后运行 update_index.ps1 更新
-        ↓ raw.githubusercontent.com（自动镜像回退）
-[ModManager.exe] → 对比 BepInEx/ModManager/installed.json → 下载 Release 资产（自动镜像回退）
-```
+## 🚀 使用方法
 
-- **无 GitHub API 依赖**：版本号和下载直链都写在 mods.json 里，规避 API 限流，且 raw/release 链接都可走 ghproxy 类镜像
-- **镜像列表可热更**：镜像列表存在 mods.json 里，镜像挂了改 json 即可，不用发新版工具
-- **状态记录**：`游戏目录/BepInEx/ModManager/installed.json` 记录每个 mod 的版本和文件清单；禁用的 mod 移到 `BepInEx/ModManager/disabled/`
+1. 双击运行 `ModManager.exe`
+2. 如果还没装过 BepInEx 前置，点顶部黄条的「**一键安装 BepInEx**」
+3. 在列表里点想要的 Mod 的「**安装**」按钮
+4. 启动游戏即可生效
 
-## 开发者维护流程
+以后 Mod 出了新版本，打开管理器就会看到橙色的「**更新**」按钮，点一下完事。
 
-发布新 mod 版本后：
+## ✨ 功能
 
-```powershell
-# 在索引仓库目录：
-.\update_index.ps1 -ModId StudentAgeEditorPlus   # 自动查 latest release 更新清单
-git add mods.json; git commit -m "update index"; git push
-```
+| 功能 | 说明 |
+|---|---|
+| 一键安装 / 更新 | 自动识别已装版本，有新版会高亮提示 |
+| 一键安装 BepInEx | 没装前置也不用去别处找，工具内直接装 |
+| 启用 / 禁用 | 想临时关掉某个 Mod 不用删文件 |
+| 卸载 | 干净移除，不留垃圾文件 |
+| 国内网络友好 | GitHub 连不上时自动切换加速镜像 |
 
-新增一个 mod：往 `mods.json` 的 `mods` 数组加一条（id/name/description/repo/version/downloadUrl/assetType/installDir），推送即可，所有用户下次打开管理器就能看到。
+## ❓ 常见问题
 
-`assetType` 说明：
-- `dll`：Release 资产是单个 DLL，放入 `installDir`
-- `zip`：Release 资产是 zip，解压到 `installDir`
+**Q: 点安装/更新提示"游戏正在运行"？**
+先完全关闭游戏再操作，游戏运行时 Mod 文件被占用无法替换。
 
-## 构建
+**Q: 安装/更新完没生效？**
+Mod 的改动需要**完全重启游戏**后才生效（不是回主菜单）。
 
-```powershell
-dotnet build -c Release
-# 产物: bin/Release/net48/ModManager.exe（单文件）
-```
+**Q: 提示"无法获取 mod 列表"？**
+网络问题。工具会自动尝试加速镜像，多点几次「刷新」；仍不行可以到对应 Mod 的 GitHub 页面手动下载。
 
-## 本地调试
+**Q: 杀毒软件报警？**
+工具是开源的（代码就在本仓库），无任何联网行为除了从 GitHub 下载 Mod。误报可添加信任。
 
-exe 同目录放 `index_url.txt`，内容为本地 mods.json 路径或任意 URL，即可覆盖默认索引地址。
+**Q: 之前手动装过 Mod 还能用这个管理吗？**
+可以。列表里会显示「已安装（版本未知）」，点一次「覆盖更新」即可纳入管理。
+
+**Q: 想手动指定游戏目录？**
+如果自动定位失败，启动时会弹出目录选择框，选到包含 `StudentAge.exe` 的文件夹即可。
+
+## 📦 目前收录的 Mod
+
+| Mod | 说明 |
+|---|---|
+| [编辑器增强 Plus](https://github.com/white12666/StudentAgeEditorPlus) | 修复官方 MOD 编辑器的多处 bug 并增强功能：字段补全、预览可见化、搜索等 |
+
+以后新 Mod 会自动出现在管理器列表里，无需更新管理器本身。
+
+---
+
+开发者 / Mod 作者请看 [DEVELOPMENT.md](DEVELOPMENT.md)。
