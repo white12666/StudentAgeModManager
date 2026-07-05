@@ -58,4 +58,7 @@ Mod 的改动需要**完全重启游戏**后才生效（不是回主菜单）。
 
 ---
 
-开发者 / Mod 作者请看 [DEVELOPMENT.md](DEVELOPMENT.md)。
+
+如果您想要参与开发或上传自己的mod到此管理器，请看 [DEVELOPMENT.md](DEVELOPMENT.md)。
+
+欢迎您的加入！
