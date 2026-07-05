@@ -46,14 +46,3 @@ dotnet build -c Release
 ## 本地调试
 
 exe 同目录放 `index_url.txt`，内容为本地 mods.json 路径或任意 URL，即可覆盖默认索引地址。
-
-## 发布步骤（首次上线）
-
-仓库定名 `white12666/StudentAgeModManager`，DefaultIndexUrl 已定稿编译。
-
-1. GitHub 新建仓库 `StudentAgeModManager`（Public，main 分支）
-2. 把本目录整个 push 上去（.gitignore 已排除 bin/obj/release_assets）
-   → mods.json 必须在仓库根，路径 `main/mods.json`
-3. 建 Release，tag `bepinex`，上传 `release_assets/BepInEx-5.4.23-package.zip`
-4. 建 Release，tag `v1.0.0`，上传 `bin/Release/net48/ModManager.exe`
-5. 创意工坊/README 引导语：下载 ModManager.exe → 双击运行 → 一键安装
