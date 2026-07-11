@@ -17,6 +17,11 @@ namespace StudentAgeModManager
         private readonly Button _btnUninstall = new Button();
         private readonly Button _btnHome = new Button();
 
+        private ModStatus _boundStatus;
+        private string _installedVersion;
+        private bool _isBound;
+        private bool _busy;
+
         public ModEntry Entry { get; private set; }
         public event Action<ModEntry> InstallClicked;
         public event Action<ModEntry> ToggleClicked;
@@ -31,11 +36,14 @@ namespace StudentAgeModManager
 
             _title.Font = new Font("Microsoft YaHei UI", 10.5f, FontStyle.Bold);
             _title.Location = new Point(12, 8);
-            _title.AutoSize = true;
+            _title.Size = new Size(258, 24);
+            _title.AutoEllipsis = true;
 
             _status.Font = new Font("Microsoft YaHei UI", 9f);
-            _status.AutoSize = true;
-            _status.Location = new Point(400, 11);
+            _status.Location = new Point(276, 8);
+            _status.Size = new Size(271, 24);
+            _status.TextAlign = ContentAlignment.MiddleRight;
+            _status.AutoEllipsis = true;
 
             _desc.Font = new Font("Microsoft YaHei UI", 9f);
             _desc.ForeColor = Color.FromArgb(90, 90, 90);
@@ -86,51 +94,75 @@ namespace StudentAgeModManager
 
         public void Bind(ModEntry entry, ModStatus status, string installedVersion)
         {
+            if (entry == null) throw new ArgumentNullException(nameof(entry));
             Entry = entry;
-            _title.Text = entry.name ?? entry.id;
-            _desc.Text = entry.description ?? "";
+            _boundStatus = status;
+            _installedVersion = installedVersion;
+            _isBound = true;
+            ApplyVisualState();
+        }
+
+        private void ApplyVisualState()
+        {
+            _title.Text = Entry.name ?? Entry.id;
+            _desc.Text = Entry.description ?? "";
+
+            // Reset every property that varies by state. SetBusy(false) calls this
+            // method, so a card always returns to its exact last bound state rather
+            // than blindly enabling buttons that should remain disabled or hidden.
+            _btnMain.Location = new Point(12, 60);
+            _btnToggle.Location = new Point(140, 60);
+            _btnUninstall.Location = new Point(232, 60);
+            _btnHome.Location = new Point(324, 60);
+
+            _btnMain.Visible = true;
+            _btnMain.Enabled = true;
             _btnToggle.Enabled = true;
             _btnToggle.Visible = true;
             _btnUninstall.Enabled = true;
             _btnUninstall.Visible = true;
-            _btnHome.Visible = true;
+            _btnHome.Enabled = true;
+            _btnHome.Visible = !string.IsNullOrWhiteSpace(Entry.repo);
 
-            if (WorkshopItem.IsDeclared(entry))
+            if (WorkshopItem.IsDeclared(Entry))
             {
                 string workshopId;
-                bool validWorkshopId = WorkshopItem.TryGetId(entry, out workshopId);
-                bool hasLegacyInstall = status != ModStatus.NotInstalled;
+                bool validWorkshopId = WorkshopItem.TryGetId(Entry, out workshopId);
+                bool hasLegacyInstall = _boundStatus != ModStatus.NotInstalled;
                 _status.Text = validWorkshopId
                     ? (hasLegacyInstall
-                        ? "由 Steam 管理（检测到旧版直装文件）"
-                        : "由 Steam 创意工坊管理")
-                    : "索引中的创意工坊 ID 无效";
+                        ? "Steam 管理 · 检测到旧版直装文件"
+                        : "Steam 管理")
+                    : "Steam 条目 · 工坊 ID 无效";
                 _status.ForeColor = validWorkshopId
                     ? (hasLegacyInstall ? Color.DarkOrange : Color.RoyalBlue)
                     : Color.Firebrick;
-                _btnMain.Text = validWorkshopId ? "订阅 / 查看工坊" : "工坊条目不可用";
+                _btnMain.Text = validWorkshopId ? "订阅 / 查看工坊" : "工坊 ID 无效";
                 _btnMain.Enabled = validWorkshopId;
                 _btnToggle.Visible = false;
                 _btnUninstall.Visible = hasLegacyInstall;
                 _btnUninstall.Text = "清理旧安装";
+                _btnUninstall.Location = new Point(140, 60);
                 _btnHome.Visible = false;
+                DisableHiddenButtons();
+                ApplyBusyState();
                 return;
             }
 
-            switch (status)
+            switch (_boundStatus)
             {
                 case ModStatus.NotInstalled:
-                    _status.Text = "未安装";
+                    _status.Text = "旧版直装 · 未安装";
                     _status.ForeColor = Color.Gray;
-                    _btnMain.Text = "安装 " + entry.version;
+                    _btnMain.Text = "安装 " + Entry.version;
                     _btnMain.Enabled = true;
                     _btnToggle.Visible = false;
                     _btnUninstall.Visible = false;
                     break;
                 case ModStatus.UpdateAvailable:
-                    _status.Text = "已装 " + installedVersion + " → 新版 " + entry.version;
+                    _status.Text = "旧版直装 · 已装 " + _installedVersion + " → 新版 " + Entry.version;
                     _status.ForeColor = Color.FromArgb(200, 120, 0);
-                    _btnMain.Text = "更新到 " + entry.version;
+                    _btnMain.Text = "更新到 " + Entry.version;
                     _btnMain.Enabled = true;
                     _btnToggle.Visible = true;
                     _btnToggle.Text = "禁用";
@@ -138,7 +170,7 @@ namespace StudentAgeModManager
                     _btnUninstall.Text = "卸载";
                     break;
                 case ModStatus.UpToDate:
-                    _status.Text = "已装 " + installedVersion + "（最新）";
+                    _status.Text = "旧版直装 · 已装 " + _installedVersion + "（最新）";
                     _status.ForeColor = Color.Green;
                     _btnMain.Text = "已是最新";
                     _btnMain.Enabled = false;
@@ -148,18 +180,18 @@ namespace StudentAgeModManager
                     _btnUninstall.Text = "卸载";
                     break;
                 case ModStatus.InstalledUnknown:
-                    _status.Text = "已安装（版本未知）";
+                    _status.Text = "旧版直装 · 已安装（版本未知）";
                     _status.ForeColor = Color.FromArgb(200, 120, 0);
-                    _btnMain.Text = "覆盖更新 " + entry.version;
+                    _btnMain.Text = "覆盖更新 " + Entry.version;
                     _btnMain.Enabled = true;
                     _btnToggle.Visible = false;
                     _btnUninstall.Visible = true;
                     _btnUninstall.Text = "卸载";
                     break;
                 case ModStatus.Disabled:
-                    _status.Text = "已禁用（" + installedVersion + "）";
+                    _status.Text = "旧版直装 · 已禁用（" + _installedVersion + "）";
                     _status.ForeColor = Color.Gray;
-                    _btnMain.Text = "更新 " + entry.version;
+                    _btnMain.Text = "更新 " + Entry.version;
                     _btnMain.Enabled = false; // 禁用状态先启用再更新，避免路径歧义
                     _btnToggle.Visible = true;
                     _btnToggle.Text = "启用";
@@ -167,17 +199,35 @@ namespace StudentAgeModManager
                     _btnUninstall.Text = "卸载";
                     break;
             }
+
+            DisableHiddenButtons();
+            ApplyBusyState();
+        }
+
+        private void DisableHiddenButtons()
+        {
+            if (!_btnToggle.Visible) _btnToggle.Enabled = false;
+            if (!_btnUninstall.Visible) _btnUninstall.Enabled = false;
+            if (!_btnHome.Visible) _btnHome.Enabled = false;
         }
 
         public void SetBusy(bool busy)
         {
-            // busy 时全部禁用；恢复由 MainForm 重新 Bind 完成
-            if (busy)
-            {
-                _btnMain.Enabled = false;
-                _btnToggle.Enabled = false;
-                _btnUninstall.Enabled = false;
-            }
+            _busy = busy;
+            if (_isBound)
+                ApplyVisualState();
+            else
+                ApplyBusyState();
+        }
+
+        private void ApplyBusyState()
+        {
+            if (!_busy) return;
+
+            _btnMain.Enabled = false;
+            _btnToggle.Enabled = false;
+            _btnUninstall.Enabled = false;
+            _btnHome.Enabled = false;
         }
     }
 }

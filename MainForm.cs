@@ -22,6 +22,8 @@ namespace StudentAgeModManager
         private readonly ProgressBar _progress = new ProgressBar();
         private readonly Panel _banner = new Panel();
         private readonly Label _bannerText = new Label();
+        private readonly Panel _workshopGuide = new Panel();
+        private readonly Label _workshopGuideText = new Label();
 
         private string _gameDir;
         private LocalState _state;
@@ -34,7 +36,7 @@ namespace StudentAgeModManager
         public MainForm()
         {
             Text = "StudentAge Mod 管理器 v" + CurrentVersion();
-            ClientSize = new Size(620, 560);
+            ClientSize = new Size(620, 620);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
@@ -59,7 +61,8 @@ namespace StudentAgeModManager
             _lblGameDir.AutoEllipsis = true;
 
             _lblBepInEx.Location = new Point(14, 34);
-            _lblBepInEx.AutoSize = true;
+            _lblBepInEx.Size = new Size(286, 22);
+            _lblBepInEx.AutoEllipsis = true;
 
             _btnRefresh.Text = "刷新";
             _btnRefresh.Location = new Point(440, 30);
@@ -74,8 +77,20 @@ namespace StudentAgeModManager
             _cmbMirror.SelectedIndexChanged += (s, e) =>
                 _downloader.Mode = (MirrorMode)_cmbMirror.SelectedIndex;
 
+            // ── 工坊操作说明（始终显示） ──
+            _workshopGuide.Location = new Point(0, 62);
+            _workshopGuide.Size = new Size(620, 48);
+            _workshopGuide.BackColor = Color.FromArgb(231, 243, 255);
+            _workshopGuideText.Location = new Point(14, 5);
+            _workshopGuideText.Size = new Size(592, 38);
+            _workshopGuideText.ForeColor = Color.FromArgb(35, 78, 121);
+            _workshopGuideText.Text =
+                "工坊 DLL 前置：先安装 BepInEx + Bridge。\r\n" +
+                "Steam 管理订阅/更新/卸载；启用/关闭请在游戏原生 Mod 页面操作，随后重启游戏。";
+            _workshopGuide.Controls.Add(_workshopGuideText);
+
             // ── BepInEx 缺失提示条 ──
-            _banner.Location = new Point(0, 62);
+            _banner.Location = new Point(0, 114);
             _banner.Size = new Size(620, 34);
             _banner.BackColor = Color.FromArgb(255, 243, 205);
             _banner.Visible = false;
@@ -91,25 +106,26 @@ namespace StudentAgeModManager
             _banner.Controls.Add(_btnInstallBep);
 
             // ── 卡片列表 ──
-            _flow.Location = new Point(14, 100);
-            _flow.Size = new Size(592, 400);
+            _flow.Location = new Point(14, 152);
+            _flow.Size = new Size(592, 418);
             _flow.AutoScroll = true;
             _flow.FlowDirection = FlowDirection.TopDown;
             _flow.WrapContents = false;
 
             // ── 底部状态栏 ──
-            _lblStatus.Location = new Point(14, 510);
+            _lblStatus.Location = new Point(14, 580);
             _lblStatus.Size = new Size(430, 18);
             _lblStatus.AutoEllipsis = true;
             _lblStatus.Text = "就绪";
 
-            _progress.Location = new Point(450, 508);
+            _progress.Location = new Point(450, 578);
             _progress.Size = new Size(156, 18);
             _progress.Visible = false;
 
             Controls.AddRange(new Control[]
             {
-                _lblGameDir, _lblBepInEx, _btnRefresh, _cmbMirror, _banner, _flow, _lblStatus, _progress,
+                _lblGameDir, _lblBepInEx, _btnRefresh, _cmbMirror, _workshopGuide,
+                _banner, _flow, _lblStatus, _progress,
             });
         }
 
@@ -145,26 +161,26 @@ namespace StudentAgeModManager
             bool bridgeCurrent = bepinExInstalled && _installer.IsWorkshopBridgeCurrent();
             if (!bepinExInstalled)
             {
-                _lblBepInEx.Text = "✘ 未安装 BepInEx 前置";
+                _lblBepInEx.Text = "✘ 未安装 BepInEx + 工坊 DLL 支持";
                 _lblBepInEx.ForeColor = Color.Firebrick;
                 _bannerText.Text = "未检测到 BepInEx 前置与创意工坊 DLL 支持。";
                 _btnInstallBep.Text = "一键安装完整前置";
             }
             else if (!bridgeCurrent)
             {
-                _lblBepInEx.Text = "⚠ BepInEx 已安装，缺少或需更新创意工坊 DLL 支持";
+                _lblBepInEx.Text = "⚠ 工坊 DLL 支持缺失或需更新";
                 _lblBepInEx.ForeColor = Color.DarkOrange;
                 _bannerText.Text = "安装桥接器后，DLL Mod 可直接通过创意工坊启用。";
                 _btnInstallBep.Text = "安装工坊 DLL 支持";
             }
             else
             {
-                _lblBepInEx.Text = "✔ BepInEx + 创意工坊 DLL 支持已安装";
+                _lblBepInEx.Text = "✔ BepInEx + 工坊 DLL 支持已安装";
                 _lblBepInEx.ForeColor = Color.Green;
             }
             _banner.Visible = !bepinExInstalled || !bridgeCurrent;
-            _flow.Location = new Point(14, _banner.Visible ? 100 : 66);
-            _flow.Height = 500 - _flow.Top;
+            _flow.Location = new Point(14, _banner.Visible ? 152 : 114);
+            _flow.Height = 570 - _flow.Top;
         }
 
         // ═══════════════ 索引拉取与列表渲染 ═══════════════
@@ -206,6 +222,7 @@ namespace StudentAgeModManager
                 card.InstallClicked += async m => await InstallModAsync(m);
                 card.ToggleClicked += m => ToggleMod(m);
                 card.UninstallClicked += m => UninstallMod(m);
+                card.SetBusy(_busy);
                 _flow.Controls.Add(card);
             }
             _flow.ResumeLayout();
@@ -315,17 +332,25 @@ namespace StudentAgeModManager
         private void UninstallMod(ModEntry mod)
         {
             if (_busy) return;
-            var r = MessageBox.Show(this, "确定卸载 " + mod.name + " 吗？", "确认卸载",
+            bool workshopItem = WorkshopItem.IsDeclared(mod);
+            string prompt = workshopItem
+                ? "确定清理 " + mod.name + " 的旧版直装文件吗？\n\n" +
+                  "此操作不会取消 Steam 订阅，也不会删除 Steam 工坊目录。"
+                : "确定卸载 " + mod.name + " 吗？";
+            var r = MessageBox.Show(this, prompt, workshopItem ? "确认清理旧安装" : "确认卸载",
                 MessageBoxButtons.YesNo, MessageBoxIcon.Question);
             if (r != DialogResult.Yes) return;
             try
             {
                 _installer.Uninstall(mod);
-                SetStatus(mod.name + " 已卸载");
+                SetStatus(workshopItem
+                    ? mod.name + " 的旧版直装文件已清理；Steam 订阅未受影响。"
+                    : mod.name + " 已卸载");
             }
             catch (Exception ex)
             {
-                MessageBox.Show(this, ex.Message, "卸载失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(this, ex.Message, workshopItem ? "清理失败" : "卸载失败",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             RebindCards();
         }

@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Windows.Forms;
+using StudentAgeModManager;
 using StudentAgeModManager.Core;
 
 namespace StudentAgeModManager.Tests
@@ -11,6 +13,7 @@ namespace StudentAgeModManager.Tests
         private const string BridgeResourceName =
             "StudentAgeModManager.Resources.StudentAge.WorkshopBridge.dll";
 
+        [STAThread]
         private static int Main()
         {
             var tempRoot = Path.Combine(Path.GetTempPath(),
@@ -34,6 +37,8 @@ namespace StudentAgeModManager.Tests
 
         private static void Run(string tempRoot)
         {
+            RunModCardUiTests();
+
             string workshopId;
             var workshopEntry = new ModEntry { id = "workshop-test", workshopId = " 001234 " };
             Assert(WorkshopItem.IsDeclared(workshopEntry), "non-empty workshop ID should select workshop flow");
@@ -90,6 +95,118 @@ namespace StudentAgeModManager.Tests
             Assert(installer.IsWorkshopBridgeCurrent(), "repair should restore the embedded bridge");
             Assert(!File.Exists(installer.WorkshopBridgePath + ".tmp"),
                 "temporary extraction file should be cleaned up");
+        }
+
+        private static void RunModCardUiTests()
+        {
+            var legacyEntry = new ModEntry
+            {
+                id = "legacy-test",
+                name = "Legacy Test",
+                description = "Legacy direct-install entry",
+                repo = "owner/repository",
+                version = "v2.0.0",
+                installDir = "BepInEx/plugins/LegacyTest",
+            };
+
+            using (var card = new ModCard())
+            {
+                var main = GetButton(card, "_btnMain");
+                var toggle = GetButton(card, "_btnToggle");
+                var uninstall = GetButton(card, "_btnUninstall");
+                var home = GetButton(card, "_btnHome");
+
+                card.Bind(legacyEntry, ModStatus.UpdateAvailable, "v1.0.0");
+                Assert(main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
+                    "legacy update actions should initially be enabled");
+                Assert(main.Visible && toggle.Visible && uninstall.Visible && home.Visible,
+                    "legacy update entry should expose update, toggle, uninstall, and home actions");
+
+                card.SetBusy(true);
+                Assert(!main.Enabled && !toggle.Enabled && !uninstall.Enabled && !home.Enabled,
+                    "busy state should disable every legacy card action");
+                card.SetBusy(false);
+                Assert(main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
+                    "leaving busy state should restore legacy update actions");
+
+                card.Bind(legacyEntry, ModStatus.UpToDate, "v2.0.0");
+                card.SetBusy(true);
+                card.SetBusy(false);
+                Assert(!main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
+                    "up-to-date main action must remain disabled after busy state");
+
+                card.Bind(legacyEntry, ModStatus.Disabled, "v2.0.0");
+                card.SetBusy(true);
+                card.SetBusy(false);
+                Assert(!main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
+                    "disabled entry must require re-enable before updating after busy state");
+                Assert(toggle.Text == "启用", "disabled entry should restore its enable action");
+            }
+
+            var workshopEntry = new ModEntry
+            {
+                id = "workshop-ui-test",
+                name = "Workshop Test",
+                description = "Steam-managed entry",
+                repo = "owner/repository",
+                version = "v1.0.0",
+                installDir = "BepInEx/plugins/WorkshopTest",
+                workshopId = "1234",
+            };
+
+            using (var card = new ModCard())
+            {
+                var main = GetButton(card, "_btnMain");
+                var toggle = GetButton(card, "_btnToggle");
+                var uninstall = GetButton(card, "_btnUninstall");
+                var home = GetButton(card, "_btnHome");
+
+                card.Bind(workshopEntry, ModStatus.NotInstalled, null);
+                Assert(main.Visible && main.Enabled && main.Text == "订阅 / 查看工坊",
+                    "normal workshop entry should expose only the Steam action");
+                Assert(!toggle.Visible && !uninstall.Visible && !home.Visible,
+                    "normal workshop entry must hide legacy management actions");
+
+                card.SetBusy(true);
+                Assert(!main.Enabled, "busy state should disable the Steam action");
+                card.SetBusy(false);
+                Assert(main.Enabled && !toggle.Visible && !uninstall.Visible && !home.Visible,
+                    "workshop card should restore only its Steam action after busy state");
+
+                card.Bind(workshopEntry, ModStatus.InstalledUnknown, null);
+                Assert(main.Visible && main.Enabled && uninstall.Visible && uninstall.Enabled,
+                    "workshop entry with a legacy install should expose Steam and cleanup actions");
+                Assert(uninstall.Text == "清理旧安装",
+                    "workshop legacy cleanup action should use explicit wording");
+                Assert(!toggle.Visible && !home.Visible,
+                    "workshop cleanup state must still hide toggle and home actions");
+
+                card.SetBusy(true);
+                card.SetBusy(false);
+                Assert(main.Enabled && uninstall.Enabled && !toggle.Visible && !home.Visible,
+                    "workshop cleanup actions should restore without revealing legacy-only actions");
+
+                workshopEntry.workshopId = "   ";
+                card.Bind(workshopEntry, ModStatus.NotInstalled, null);
+                card.SetBusy(true);
+                card.SetBusy(false);
+                Assert(main.Visible && !main.Enabled && main.Text == "工坊 ID 无效",
+                    "invalid declared workshop ID must remain visibly blocked after busy state");
+                Assert(!toggle.Visible && !toggle.Enabled &&
+                       !uninstall.Visible && !uninstall.Enabled &&
+                       !home.Visible && !home.Enabled,
+                    "invalid workshop entry must not expose any legacy fallback action");
+            }
+        }
+
+        private static Button GetButton(ModCard card, string fieldName)
+        {
+            var field = typeof(ModCard).GetField(fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert(field != null, "missing ModCard field: " + fieldName);
+            var button = field.GetValue(card) as Button;
+            Assert(button != null, "ModCard field is not a button: " + fieldName);
+            return button;
         }
 
         private static string HashEmbeddedBridge()
