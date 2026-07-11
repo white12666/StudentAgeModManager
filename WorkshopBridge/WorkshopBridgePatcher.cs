@@ -67,10 +67,12 @@ namespace StudentAge.WorkshopBridge
             Directory.CreateDirectory(Path.GetDirectoryName(logPath));
             using (var writer = new StreamWriter(logPath, false))
             {
-                writer.WriteLine("StudentAge Workshop Bridge 0.1.0");
+                writer.WriteLine("StudentAge Workshop Bridge 0.2.0");
                 writer.WriteLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
                 writer.WriteLine("Synchronized: " + result.Synchronized);
                 writer.WriteLine("Enabled IDs: " + result.EnabledIdCount);
+                writer.WriteLine("Baseline IDs: " + result.BaselineIdCount);
+                writer.WriteLine("Auto-enabled IDs: " + result.AutoEnabledIdCount);
                 writer.WriteLine("Linked: " + result.LinkedCount);
                 writer.WriteLine("Removed stale links: " + result.RemovedLinkCount);
                 writer.WriteLine("Skipped: " + result.SkippedCount);

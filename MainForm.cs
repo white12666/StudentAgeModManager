@@ -79,18 +79,19 @@ namespace StudentAgeModManager
 
             // ── 工坊操作说明（始终显示） ──
             _workshopGuide.Location = new Point(0, 62);
-            _workshopGuide.Size = new Size(620, 48);
+            _workshopGuide.Size = new Size(620, 64);
             _workshopGuide.BackColor = Color.FromArgb(231, 243, 255);
             _workshopGuideText.Location = new Point(14, 5);
-            _workshopGuideText.Size = new Size(592, 38);
+            _workshopGuideText.Size = new Size(592, 54);
             _workshopGuideText.ForeColor = Color.FromArgb(35, 78, 121);
             _workshopGuideText.Text =
-                "工坊 DLL 前置：先安装 BepInEx + Bridge。\r\n" +
-                "Steam 管理订阅/更新/卸载；启用/关闭请在游戏原生 Mod 页面操作，随后重启游戏。";
+                "工坊 DLL 前置：先安装 BepInEx + Bridge；现有订阅只建基线，不会自动开启。\r\n" +
+                "之后新订阅的合法 DLL：Steam 下载完成后的下一次游戏启动自动启用并直接加载。\r\n" +
+                "Steam 管理订阅/更新/卸载；可在游戏“本地”页关闭，关闭后 Bridge 不会再次开启。";
             _workshopGuide.Controls.Add(_workshopGuideText);
 
             // ── BepInEx 缺失提示条 ──
-            _banner.Location = new Point(0, 114);
+            _banner.Location = new Point(0, 130);
             _banner.Size = new Size(620, 34);
             _banner.BackColor = Color.FromArgb(255, 243, 205);
             _banner.Visible = false;
@@ -106,7 +107,7 @@ namespace StudentAgeModManager
             _banner.Controls.Add(_btnInstallBep);
 
             // ── 卡片列表 ──
-            _flow.Location = new Point(14, 152);
+            _flow.Location = new Point(14, 130);
             _flow.Size = new Size(592, 418);
             _flow.AutoScroll = true;
             _flow.FlowDirection = FlowDirection.TopDown;
@@ -170,7 +171,7 @@ namespace StudentAgeModManager
             {
                 _lblBepInEx.Text = "⚠ 工坊 DLL 支持缺失或需更新";
                 _lblBepInEx.ForeColor = Color.DarkOrange;
-                _bannerText.Text = "安装桥接器后，DLL Mod 可直接通过创意工坊启用。";
+                _bannerText.Text = "新订阅的合法 DLL：下载完成后的下次启动自动启用。";
                 _btnInstallBep.Text = "安装工坊 DLL 支持";
             }
             else
@@ -178,8 +179,9 @@ namespace StudentAgeModManager
                 _lblBepInEx.Text = "✔ BepInEx + 工坊 DLL 支持已安装";
                 _lblBepInEx.ForeColor = Color.Green;
             }
-            _banner.Visible = !bepinExInstalled || !bridgeCurrent;
-            _flow.Location = new Point(14, _banner.Visible ? 152 : 114);
+            bool showBanner = !bepinExInstalled || !bridgeCurrent;
+            _banner.Visible = showBanner;
+            _flow.Location = new Point(14, showBanner ? 168 : 130);
             _flow.Height = 570 - _flow.Top;
         }
 
@@ -272,7 +274,8 @@ namespace StudentAgeModManager
                 try
                 {
                     Process.Start(WorkshopItem.PageUrl(workshopId));
-                    SetStatus("请在 Steam 订阅该项目，再到游戏原生 Mod 页面启用并重启游戏。");
+                    SetStatus("请在 Steam 订阅；下载完成后的下一次游戏启动会自动启用合法 DLL 项目。" +
+                        "现有基线项目仍需在游戏“本地”页手动开启。");
                 }
                 catch (Exception ex)
                 {
@@ -364,7 +367,8 @@ namespace StudentAgeModManager
                 try
                 {
                     _installer.InstallWorkshopBridge();
-                    SetStatus("创意工坊 DLL 支持安装完成。启用工坊 DLL Mod 后重启游戏即可生效。");
+                    SetStatus("工坊 DLL 支持安装完成。现有订阅不会自动开启；之后新订阅的合法 DLL 会在" +
+                        "下载完成后的下一次游戏启动自动启用。");
                 }
                 catch (Exception ex)
                 {
@@ -389,7 +393,8 @@ namespace StudentAgeModManager
             try
             {
                 await _installer.InstallBepInExAsync(_index.bepinex, OnProgress);
-                SetStatus("BepInEx + 创意工坊 DLL 支持安装完成");
+                SetStatus("BepInEx + 工坊 DLL 支持安装完成；现有订阅只建基线，之后新订阅的合法 DLL " +
+                    "会在下载完成后的下一次游戏启动自动启用。");
             }
             catch (Exception ex)
             {

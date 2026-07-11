@@ -37,6 +37,7 @@ namespace StudentAgeModManager.Tests
 
         private static void Run(string tempRoot)
         {
+            RunMainFormUiTests(Path.Combine(tempRoot, "main-form-ui"));
             RunModCardUiTests();
 
             string workshopId;
@@ -95,6 +96,53 @@ namespace StudentAgeModManager.Tests
             Assert(installer.IsWorkshopBridgeCurrent(), "repair should restore the embedded bridge");
             Assert(!File.Exists(installer.WorkshopBridgePath + ".tmp"),
                 "temporary extraction file should be cleaned up");
+        }
+
+        private static void RunMainFormUiTests(string root)
+        {
+            Directory.CreateDirectory(root);
+            using (var form = new MainForm())
+            {
+                var guide = GetControl<Panel>(form, "_workshopGuide");
+                var guideText = GetControl<Label>(form, "_workshopGuideText");
+                var banner = GetControl<Panel>(form, "_banner");
+                var flow = GetControl<FlowLayoutPanel>(form, "_flow");
+                var status = GetControl<Label>(form, "_lblStatus");
+
+                Assert(guideText.Text.Contains("现有订阅只建基线，不会自动开启"),
+                    "workshop guide should explain the per-user first-run baseline");
+                Assert(guideText.Text.Contains("下载完成后的下一次游戏启动自动启用并直接加载"),
+                    "workshop guide should explain when new DLL subscriptions execute");
+                Assert(guideText.Text.Contains("游戏“本地”页关闭") &&
+                       guideText.Text.Contains("不会再次开启"),
+                    "workshop guide should explain that a manual disable is persistent");
+                Assert(guideText.Bottom <= guide.ClientSize.Height,
+                    "workshop guide text must fit inside the enlarged guide panel");
+                Assert(guide.Bottom <= banner.Top,
+                    "workshop guide must not overlap the BepInEx banner");
+                Assert(guide.Bottom <= flow.Top && flow.Bottom <= status.Top,
+                    "initial workshop guide/list/status layout must not overlap");
+
+                var gameRoot = Path.Combine(root, "StudentAge");
+                Directory.CreateDirectory(gameRoot);
+                var installer = new ModInstaller(new LocalState(gameRoot), new Downloader());
+                SetPrivateField(form, "_installer", installer);
+
+                InvokePrivate(form, "UpdateBepInExUi");
+                Assert(flow.Top == 168 && banner.Bottom <= flow.Top,
+                    "visible prerequisite banner must remain above the mod list");
+                Assert(flow.Bottom <= status.Top,
+                    "banner-visible mod list must remain above the status bar");
+
+                Directory.CreateDirectory(Path.Combine(gameRoot, "BepInEx", "core"));
+                File.WriteAllBytes(Path.Combine(gameRoot, "winhttp.dll"), new byte[] { 1 });
+                installer.InstallWorkshopBridge();
+                InvokePrivate(form, "UpdateBepInExUi");
+                Assert(flow.Top == 130 && guide.Bottom <= flow.Top,
+                    "hidden prerequisite banner must leave the mod list below the guide");
+                Assert(flow.Bottom <= status.Top,
+                    "banner-hidden mod list must remain above the status bar");
+            }
         }
 
         private static void RunModCardUiTests()
@@ -197,6 +245,32 @@ namespace StudentAgeModManager.Tests
                        !home.Visible && !home.Enabled,
                     "invalid workshop entry must not expose any legacy fallback action");
             }
+        }
+
+        private static T GetControl<T>(MainForm form, string fieldName) where T : Control
+        {
+            var field = typeof(MainForm).GetField(fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert(field != null, "missing MainForm field: " + fieldName);
+            var control = field.GetValue(form) as T;
+            Assert(control != null, "MainForm field has the wrong control type: " + fieldName);
+            return control;
+        }
+
+        private static void SetPrivateField(object instance, string fieldName, object value)
+        {
+            var field = instance.GetType().GetField(fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert(field != null, "missing private field: " + fieldName);
+            field.SetValue(instance, value);
+        }
+
+        private static void InvokePrivate(object instance, string methodName)
+        {
+            var method = instance.GetType().GetMethod(methodName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert(method != null, "missing private method: " + methodName);
+            method.Invoke(instance, null);
         }
 
         private static Button GetButton(ModCard card, string fieldName)
