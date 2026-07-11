@@ -73,8 +73,11 @@ namespace StudentAgeModManager
             if (Entry == null) return;
             try
             {
-                if (!string.IsNullOrEmpty(Entry.workshopId))
-                    Process.Start("https://steamcommunity.com/sharedfiles/filedetails/?id=" + Entry.workshopId);
+                string workshopId;
+                if (WorkshopItem.TryGetId(Entry, out workshopId))
+                    Process.Start(WorkshopItem.PageUrl(workshopId));
+                else if (WorkshopItem.IsDeclared(Entry))
+                    return;
                 else if (!string.IsNullOrEmpty(Entry.repo))
                     Process.Start("https://github.com/" + Entry.repo);
             }
@@ -87,7 +90,32 @@ namespace StudentAgeModManager
             _title.Text = entry.name ?? entry.id;
             _desc.Text = entry.description ?? "";
             _btnToggle.Enabled = true;
+            _btnToggle.Visible = true;
             _btnUninstall.Enabled = true;
+            _btnUninstall.Visible = true;
+            _btnHome.Visible = true;
+
+            if (WorkshopItem.IsDeclared(entry))
+            {
+                string workshopId;
+                bool validWorkshopId = WorkshopItem.TryGetId(entry, out workshopId);
+                bool hasLegacyInstall = status != ModStatus.NotInstalled;
+                _status.Text = validWorkshopId
+                    ? (hasLegacyInstall
+                        ? "由 Steam 管理（检测到旧版直装文件）"
+                        : "由 Steam 创意工坊管理")
+                    : "索引中的创意工坊 ID 无效";
+                _status.ForeColor = validWorkshopId
+                    ? (hasLegacyInstall ? Color.DarkOrange : Color.RoyalBlue)
+                    : Color.Firebrick;
+                _btnMain.Text = validWorkshopId ? "订阅 / 查看工坊" : "工坊条目不可用";
+                _btnMain.Enabled = validWorkshopId;
+                _btnToggle.Visible = false;
+                _btnUninstall.Visible = hasLegacyInstall;
+                _btnUninstall.Text = "清理旧安装";
+                _btnHome.Visible = false;
+                return;
+            }
 
             switch (status)
             {

@@ -81,7 +81,9 @@ namespace StudentAgeModManager.Core
                     : ModStatus.UpToDate;
             }
             // 无记录：探测安装目录里是否已有文件（存量用户）
-            var dir = Path.Combine(GameDir, entry.installDir.Replace('/', '\\'));
+            var relativeInstallDir = (entry.installDir ?? string.Empty).Replace('/', '\\').Trim('\\');
+            if (relativeInstallDir.Length == 0) return ModStatus.NotInstalled;
+            var dir = Path.Combine(GameDir, relativeInstallDir);
             if (Directory.Exists(dir) && Directory.GetFileSystemEntries(dir).Length > 0)
                 return ModStatus.InstalledUnknown;
             return ModStatus.NotInstalled;

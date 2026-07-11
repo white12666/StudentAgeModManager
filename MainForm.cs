@@ -79,13 +79,13 @@ namespace StudentAgeModManager
             _banner.Size = new Size(620, 34);
             _banner.BackColor = Color.FromArgb(255, 243, 205);
             _banner.Visible = false;
-            _bannerText.Text = "未检测到 BepInEx 前置，所有 mod 需要它才能运行。";
+            _bannerText.Text = "未检测到 BepInEx 前置与创意工坊 DLL 支持。";
             _bannerText.Location = new Point(14, 8);
             _bannerText.AutoSize = true;
             _bannerText.ForeColor = Color.FromArgb(133, 100, 4);
-            _btnInstallBep.Text = "一键安装 BepInEx";
-            _btnInstallBep.Location = new Point(470, 4);
-            _btnInstallBep.Size = new Size(130, 26);
+            _btnInstallBep.Text = "一键安装完整前置";
+            _btnInstallBep.Location = new Point(450, 4);
+            _btnInstallBep.Size = new Size(150, 26);
             _btnInstallBep.Click += async (s, e) => await InstallBepInExAsync();
             _banner.Controls.Add(_bannerText);
             _banner.Controls.Add(_btnInstallBep);
@@ -141,10 +141,28 @@ namespace StudentAgeModManager
 
         private void UpdateBepInExUi()
         {
-            bool ok = _installer.IsBepInExInstalled();
-            _lblBepInEx.Text = ok ? "✔ BepInEx 前置已安装" : "✘ 未安装 BepInEx 前置";
-            _lblBepInEx.ForeColor = ok ? Color.Green : Color.Firebrick;
-            _banner.Visible = !ok;
+            bool bepinExInstalled = _installer.IsBepInExInstalled();
+            bool bridgeCurrent = bepinExInstalled && _installer.IsWorkshopBridgeCurrent();
+            if (!bepinExInstalled)
+            {
+                _lblBepInEx.Text = "✘ 未安装 BepInEx 前置";
+                _lblBepInEx.ForeColor = Color.Firebrick;
+                _bannerText.Text = "未检测到 BepInEx 前置与创意工坊 DLL 支持。";
+                _btnInstallBep.Text = "一键安装完整前置";
+            }
+            else if (!bridgeCurrent)
+            {
+                _lblBepInEx.Text = "⚠ BepInEx 已安装，缺少或需更新创意工坊 DLL 支持";
+                _lblBepInEx.ForeColor = Color.DarkOrange;
+                _bannerText.Text = "安装桥接器后，DLL Mod 可直接通过创意工坊启用。";
+                _btnInstallBep.Text = "安装工坊 DLL 支持";
+            }
+            else
+            {
+                _lblBepInEx.Text = "✔ BepInEx + 创意工坊 DLL 支持已安装";
+                _lblBepInEx.ForeColor = Color.Green;
+            }
+            _banner.Visible = !bepinExInstalled || !bridgeCurrent;
             _flow.Location = new Point(14, _banner.Visible ? 100 : 66);
             _flow.Height = 500 - _flow.Top;
         }
@@ -224,6 +242,28 @@ namespace StudentAgeModManager
         private async Task InstallModAsync(ModEntry mod)
         {
             if (_busy) return;
+            if (WorkshopItem.IsDeclared(mod))
+            {
+                string workshopId;
+                if (!WorkshopItem.TryGetId(mod, out workshopId))
+                {
+                    MessageBox.Show(this, "索引中的创意工坊 ID 无效，已拒绝回退为直接 DLL 安装。",
+                        "工坊条目无效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                try
+                {
+                    Process.Start(WorkshopItem.PageUrl(workshopId));
+                    SetStatus("请在 Steam 订阅该项目，再到游戏原生 Mod 页面启用并重启游戏。");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this, ex.Message, "无法打开创意工坊", MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+                return;
+            }
             if (!_installer.IsBepInExInstalled())
             {
                 MessageBox.Show(this, "请先安装 BepInEx 前置（顶部黄条一键安装）。",
@@ -293,21 +333,42 @@ namespace StudentAgeModManager
         private async Task InstallBepInExAsync()
         {
             if (_busy) return;
+            if (_installer.IsBepInExInstalled())
+            {
+                SetBusy(true, "正在安装创意工坊 DLL 支持...");
+                try
+                {
+                    _installer.InstallWorkshopBridge();
+                    SetStatus("创意工坊 DLL 支持安装完成。启用工坊 DLL Mod 后重启游戏即可生效。");
+                }
+                catch (Exception ex)
+                {
+                    SetStatus("创意工坊 DLL 支持安装失败: " + ex.Message);
+                    MessageBox.Show(this, ex.Message, "安装失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                finally
+                {
+                    SetBusy(false, null);
+                    UpdateBepInExUi();
+                }
+                return;
+            }
+
             if (_index == null || _index.bepinex == null || string.IsNullOrEmpty(_index.bepinex.downloadUrl))
             {
                 MessageBox.Show(this, "索引中没有 BepInEx 下载信息，请先点击刷新。",
                     "无法安装", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
-            SetBusy(true, "正在下载 BepInEx ...");
+            SetBusy(true, "正在下载 BepInEx + 创意工坊 DLL 支持...");
             try
             {
                 await _installer.InstallBepInExAsync(_index.bepinex, OnProgress);
-                SetStatus("BepInEx 安装完成");
+                SetStatus("BepInEx + 创意工坊 DLL 支持安装完成");
             }
             catch (Exception ex)
             {
-                SetStatus("BepInEx 安装失败: " + ex.Message);
+                SetStatus("完整前置安装失败: " + ex.Message);
                 MessageBox.Show(this, ex.Message, "安装失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally

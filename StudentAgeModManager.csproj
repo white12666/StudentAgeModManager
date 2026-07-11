@@ -15,12 +15,33 @@
     <DebugType>none</DebugType>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>
+    <WorkshopBridgeProject>$(MSBuildProjectDirectory)\WorkshopBridge\StudentAge.WorkshopBridge.csproj</WorkshopBridgeProject>
+    <WorkshopBridgeOutput>$(MSBuildProjectDirectory)\WorkshopBridge\bin\$(Configuration)\net48\StudentAge.WorkshopBridge.dll</WorkshopBridgeOutput>
   </PropertyGroup>
+
+  <!-- The bridge and its tests are independent SDK projects below this directory.
+       Exclude their sources (including nested obj files) from the WinForms app's
+       default recursive Compile items. -->
+  <ItemGroup>
+    <Compile Remove="WorkshopBridge\**\*.cs;WorkshopBridge.Tests\**\*.cs;ModManager.Tests\**\*.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Security" />
+  </ItemGroup>
+
+  <!-- Build the preloader patcher first and embed it in ModManager.exe. This lets
+       an existing BepInEx installation gain workshop DLL support without a second
+       download or a customized upstream BepInEx archive. -->
+  <ItemGroup>
+    <ProjectReference Include="$(WorkshopBridgeProject)"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
+    <EmbeddedResource Include="$(WorkshopBridgeOutput)"
+                      LogicalName="StudentAgeModManager.Resources.StudentAge.WorkshopBridge.dll" />
   </ItemGroup>
 
 </Project>

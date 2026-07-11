@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>StudentAge.WorkshopBridge.Tests</AssemblyName>
+    <RootNamespace>StudentAge.WorkshopBridge.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WorkshopBridge\StudentAge.WorkshopBridge.csproj" />
+  </ItemGroup>
+
+</Project>

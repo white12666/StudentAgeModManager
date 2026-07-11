@@ -22,6 +22,10 @@ $updated = 0
 
 foreach ($mod in $index.mods) {
     if ($ModId -and $mod.id -ne $ModId) { continue }
+    if ($mod.workshopId) {
+        Write-Host "跳过 $($mod.id)：由 Steam 创意工坊管理" -ForegroundColor DarkGray
+        continue
+    }
     if (-not $mod.repo) { continue }
 
     Write-Host "查询 $($mod.id) ($($mod.repo)) ..." -ForegroundColor Cyan
