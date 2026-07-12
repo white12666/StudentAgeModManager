@@ -8,6 +8,11 @@
     <Version>0.2.0</Version>
     <AssemblyVersion>0.2.0.0</AssemblyVersion>
     <FileVersion>0.2.0.0</FileVersion>
+    <!-- ModManager compares the installed Bridge with its embedded copy by SHA-256.
+         Keep Bridge bytes stable across unrelated UI, documentation, and index commits;
+         only Bridge inputs should change this assembly. -->
+    <Deterministic>true</Deterministic>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Description>Safely auto-enables new per-user StudentAge Workshop DLL subscriptions and links enabled plugins before Chainloader scanning.</Description>
     <DebugType>none</DebugType>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>

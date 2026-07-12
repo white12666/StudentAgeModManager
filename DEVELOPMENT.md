@@ -43,6 +43,15 @@ build_release.ps1                 生成 exe 和带 Bridge 的手动前置包
 
 Bridge 的 `Mono.Cecil` 包只用于编译 BepInEx Patcher 的方法签名，设置了 `ExcludeAssets=runtime`。发布时不能额外携带一份 Mono.Cecil；运行时使用 `BepInEx/core/Mono.Cecil.dll`（BepInEx 5.4.23.4 自带 0.10.4.0）。
 
+`ModInstaller` 会用 SHA-256 精确比较已安装 Bridge 与管理器内嵌副本。为避免只修改管理器 UI、文档或 `mods.json` 时也让 Bridge 被误判为新版本，Bridge 项目必须保持确定性构建，并设置：
+
+```xml
+<Deterministic>true</Deterministic>
+<IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+```
+
+因此新增中央索引 `workshopId` 不需要用户更新 Bridge；用户只需刷新索引并由 Steam 下载新订阅 Mod 自己的内容。只有 Bridge 源码、项目配置、依赖、协议版本或构建工具链真正变化时，Bridge 哈希才应改变。不要把 Git 提交哈希重新写入 Bridge 的 `AssemblyInformationalVersion`。
+
 ## 为什么必须是 Preloader Patcher
 
 BepInEx 5 Chainloader 只递归扫描 `Paths.PluginPath`，即 `BepInEx/plugins`。普通插件本身也在该扫描阶段才被发现；如果 Bridge 是普通插件，执行时已经太晚，无法让新工坊 DLL 在同一次启动中被扫描。

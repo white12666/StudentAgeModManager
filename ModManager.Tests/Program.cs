@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
@@ -86,6 +87,11 @@ namespace StudentAgeModManager.Tests
 
             installer.InstallWorkshopBridge();
             Assert(File.Exists(installer.WorkshopBridgePath), "bridge should be extracted to patchers");
+            var bridgeVersion = FileVersionInfo.GetVersionInfo(installer.WorkshopBridgePath);
+            Assert(bridgeVersion.ProductVersion == "0.2.0" &&
+                   !bridgeVersion.ProductVersion.Contains("+"),
+                "embedded Bridge product version must not include a Git revision; unrelated " +
+                "manager or index commits must not change its exact-hash identity");
             Assert(installer.IsWorkshopBridgeCurrent(), "freshly extracted bridge should be current");
             Assert(HashEmbeddedBridge() == HashFile(installer.WorkshopBridgePath),
                 "extracted bridge must exactly match the embedded resource");
