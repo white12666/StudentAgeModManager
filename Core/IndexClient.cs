@@ -15,11 +15,14 @@ namespace StudentAgeModManager.Core
             "https://raw.githubusercontent.com/white12666/StudentAgeModManager/main/mods.json";
 
         private readonly Downloader _downloader;
+        private readonly WorkshopMetadataService _workshopMetadata;
         private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
 
-        public IndexClient(Downloader downloader)
+        public IndexClient(Downloader downloader,
+            WorkshopMetadataService workshopMetadata = null)
         {
-            _downloader = downloader;
+            _downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
+            _workshopMetadata = workshopMetadata;
         }
 
         public async Task<ModIndex> FetchAsync(string indexUrl = null, CancellationToken ct = default(CancellationToken))
@@ -27,6 +30,8 @@ namespace StudentAgeModManager.Core
             var url = indexUrl ?? OverrideIndexUrl() ?? DefaultIndexUrl;
             var text = await _downloader.DownloadStringAsync(url, ct);
             var index = ParseAndValidate(text);
+            if (_workshopMetadata != null)
+                await _workshopMetadata.EnrichMissingAsync(index, ct);
             if (index.mirrors != null && index.mirrors.Count > 0)
                 _downloader.Mirrors = index.mirrors; // 用远端清单刷新镜像列表
             return index;
@@ -78,6 +83,8 @@ namespace StudentAgeModManager.Core
                 var entry = mods[i] as Dictionary<string, object>;
                 if (entry == null) continue;
                 ValidateStringProperty(entry, "id", "mods[" + i + "] 的 id");
+                ValidateStringProperty(entry, "name", "mods[" + i + "] 的 name");
+                ValidateStringProperty(entry, "description", "mods[" + i + "] 的 description");
                 ValidateStringProperty(entry, "workshopId",
                     "mods[" + i + "] 的 workshopId");
             }

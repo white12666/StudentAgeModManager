@@ -14,6 +14,8 @@ namespace StudentAgeModManager.Core
         public string GameDir { get; }
         public string StateDir => Path.Combine(GameDir, "BepInEx", "ModManager");
         public string DisabledDir => Path.Combine(StateDir, "disabled");
+        public string WorkshopMetadataCachePath =>
+            Path.Combine(StateDir, "workshop-metadata.json");
         private string InstalledJsonPath => Path.Combine(StateDir, "installed.json");
 
         public Dictionary<string, InstalledMod> Installed { get; private set; }

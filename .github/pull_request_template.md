@@ -3,6 +3,7 @@
 - Mod 名称：
 - `mods.json` 中的 Mod ID：
 - Steam 工坊页面（真实链接）：
+- 名称/说明来源（索引显式填写，或留空由 Steam 补全）：
 - 源码仓库：
 - 作者与许可证/分发授权：
 - 本次新增或更新的内容：
@@ -13,6 +14,7 @@
 
 ```text
 Index validation passed: ...
+Steam Workshop verification passed: ...
 ```
 
 ## 检查清单
@@ -21,9 +23,12 @@ Index validation passed: ...
 - [ ] 链接只使用官方域名、默认 HTTPS 端口，且恰好有一个小写 `id` 参数；没有 user-info 或 fragment。
 - [ ] Mod ID 不与现有条目重复（忽略大小写）。
 - [ ] Workshop ID 规范化后不与现有条目重复。
+- [ ] 工坊项目已公开可读，并且属于 StudentAge AppID `1991040`。
+- [ ] 我已明确选择索引文案；与 Steam 重复的 `name`/`description` 可以省略、设为 `null` 或留空，非空索引文案将始终优先。
 - [ ] 工坊包包含合法的 `workshop-plugin.json` 和固定的 `BepInEx/plugins` 目录。
 - [ ] 已提供可审查源码及作者/许可证或分发授权信息。
 - [ ] 已运行 `dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Release -- --validate-index .\mods.json`。
+- [ ] 已运行 `dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Release -- --validate-index .\mods.json --verify-workshop` 并粘贴成功结果。
 - [ ] 本 PR 未提交 DLL、可执行文件、Steam 内容、`bin/`、`obj/` 或 `release_assets/`。
 
 提交前请阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)。任一非法或重复条目都会让运行时和 PR CI 拒绝整份索引。

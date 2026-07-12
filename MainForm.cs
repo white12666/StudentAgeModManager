@@ -172,7 +172,9 @@ namespace StudentAgeModManager
             _lblGameDir.Text = "游戏目录: " + _gameDir;
             _state = new LocalState(_gameDir);
             _installer = new ModInstaller(_state, _downloader);
-            _indexClient = new IndexClient(_downloader);
+            var workshopMetadata = new WorkshopMetadataService(
+                new SteamWorkshopMetadataProvider(), _state.WorkshopMetadataCachePath);
+            _indexClient = new IndexClient(_downloader, workshopMetadata);
 
             UpdateBepInExUi();
             await RefreshIndexAsync();

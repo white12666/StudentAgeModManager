@@ -104,8 +104,10 @@ namespace StudentAgeModManager
 
         private void ApplyVisualState()
         {
-            _title.Text = Entry.name ?? Entry.id;
-            _desc.Text = Entry.description ?? "";
+            _title.Text = string.IsNullOrWhiteSpace(Entry.name) ? Entry.id : Entry.name;
+            _desc.Text = string.IsNullOrWhiteSpace(Entry.description)
+                ? (WorkshopItem.IsDeclared(Entry) ? WorkshopMetadataService.DefaultDescription : "")
+                : Entry.description;
 
             // Reset every property that varies by state. SetBusy(false) calls this
             // method, so a card always returns to its exact last bound state rather
