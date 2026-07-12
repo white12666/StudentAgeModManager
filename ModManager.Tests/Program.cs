@@ -1,4 +1,5 @@
 using System;
+using System.Drawing;
 using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -104,20 +105,41 @@ namespace StudentAgeModManager.Tests
             using (var form = new MainForm())
             {
                 var guide = GetControl<Panel>(form, "_workshopGuide");
-                var guideText = GetControl<Label>(form, "_workshopGuideText");
+                var setupTitle = GetControl<Label>(form, "_workshopSetupTitle");
+                var setupText = GetControl<Label>(form, "_workshopSetupText");
+                var manageTitle = GetControl<Label>(form, "_workshopManageTitle");
+                var manageText = GetControl<Label>(form, "_workshopManageText");
                 var banner = GetControl<Panel>(form, "_banner");
                 var flow = GetControl<FlowLayoutPanel>(form, "_flow");
                 var status = GetControl<Label>(form, "_lblStatus");
 
-                Assert(guideText.Text.Contains("现有订阅只建基线，不会自动开启"),
-                    "workshop guide should explain the per-user first-run baseline");
-                Assert(guideText.Text.Contains("下载完成后的下一次游戏启动自动启用并直接加载"),
-                    "workshop guide should explain when new DLL subscriptions execute");
-                Assert(guideText.Text.Contains("游戏“本地”页关闭") &&
-                       guideText.Text.Contains("不会再次开启"),
-                    "workshop guide should explain that a manual disable is persistent");
-                Assert(guideText.Bottom <= guide.ClientSize.Height,
-                    "workshop guide text must fit inside the enlarged guide panel");
+                Assert(setupTitle.Text == "第一次使用前的准备" && setupTitle.Font.Bold,
+                    "workshop guide should use a clear first-use heading");
+                Assert(setupText.Text.Contains("点击“一键安装完整前置”即可") &&
+                       setupText.Text.Contains("已有订阅不会自动开启"),
+                    "first-use text should explain the one-click setup and preserve existing subscriptions");
+                Assert(setupText.Text.Contains("支持本功能的 DLL Mod") &&
+                       setupText.Text.Contains("Steam 下载完成后，下次启动游戏") &&
+                       setupText.Text.Contains("自动启用并生效"),
+                    "first-use text should accurately explain when supported DLL mods become active");
+                Assert(manageTitle.Text == "如何管理 Mod" && manageTitle.Font.Bold,
+                    "workshop guide should use a clear management heading");
+                Assert(manageText.Text.Contains("Steam 创意工坊") &&
+                       manageText.Text.Contains("更新由 Steam 自动完成"),
+                    "management text should explain Steam subscription and update ownership");
+                Assert(manageText.Text.Contains("游戏“本地”页") &&
+                       manageText.Text.Contains("重启后生效") &&
+                       manageText.Text.Contains("手动关闭后不会被再次自动开启"),
+                    "management text should explain the native switch and persistent manual disable");
+                AssertTextFits(setupText,
+                    "first-use instructions must fit without clipping");
+                AssertTextFits(manageText,
+                    "management instructions must fit without clipping");
+                Assert(setupTitle.Bottom <= setupText.Top &&
+                       setupText.Bottom <= manageTitle.Top &&
+                       manageTitle.Bottom <= manageText.Top &&
+                       manageText.Bottom <= guide.ClientSize.Height,
+                    "workshop guide sections must not overlap or leave the panel");
                 Assert(guide.Bottom <= banner.Top,
                     "workshop guide must not overlap the BepInEx banner");
                 Assert(guide.Bottom <= flow.Top && flow.Bottom <= status.Top,
@@ -129,7 +151,7 @@ namespace StudentAgeModManager.Tests
                 SetPrivateField(form, "_installer", installer);
 
                 InvokePrivate(form, "UpdateBepInExUi");
-                Assert(flow.Top == 168 && banner.Bottom <= flow.Top,
+                Assert(flow.Top == 234 && banner.Bottom <= flow.Top,
                     "visible prerequisite banner must remain above the mod list");
                 Assert(flow.Bottom <= status.Top,
                     "banner-visible mod list must remain above the status bar");
@@ -138,7 +160,7 @@ namespace StudentAgeModManager.Tests
                 File.WriteAllBytes(Path.Combine(gameRoot, "winhttp.dll"), new byte[] { 1 });
                 installer.InstallWorkshopBridge();
                 InvokePrivate(form, "UpdateBepInExUi");
-                Assert(flow.Top == 130 && guide.Bottom <= flow.Top,
+                Assert(flow.Top == 196 && guide.Bottom <= flow.Top,
                     "hidden prerequisite banner must leave the mod list below the guide");
                 Assert(flow.Bottom <= status.Top,
                     "banner-hidden mod list must remain above the status bar");
@@ -245,6 +267,17 @@ namespace StudentAgeModManager.Tests
                        !home.Visible && !home.Enabled,
                     "invalid workshop entry must not expose any legacy fallback action");
             }
+        }
+
+        private static void AssertTextFits(Label label, string message)
+        {
+            var measured = TextRenderer.MeasureText(label.Text, label.Font,
+                new Size(label.ClientSize.Width, int.MaxValue),
+                TextFormatFlags.TextBoxControl | TextFormatFlags.WordBreak);
+            Assert(measured.Width <= label.ClientSize.Width &&
+                   measured.Height <= label.ClientSize.Height,
+                message + "; measured=" + measured.Width + "x" + measured.Height +
+                ", available=" + label.ClientSize.Width + "x" + label.ClientSize.Height);
         }
 
         private static T GetControl<T>(MainForm form, string fieldName) where T : Control

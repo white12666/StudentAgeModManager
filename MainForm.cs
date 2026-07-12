@@ -23,7 +23,10 @@ namespace StudentAgeModManager
         private readonly Panel _banner = new Panel();
         private readonly Label _bannerText = new Label();
         private readonly Panel _workshopGuide = new Panel();
-        private readonly Label _workshopGuideText = new Label();
+        private readonly Label _workshopSetupTitle = new Label();
+        private readonly Label _workshopSetupText = new Label();
+        private readonly Label _workshopManageTitle = new Label();
+        private readonly Label _workshopManageText = new Label();
 
         private string _gameDir;
         private LocalState _state;
@@ -79,19 +82,38 @@ namespace StudentAgeModManager
 
             // ── 工坊操作说明（始终显示） ──
             _workshopGuide.Location = new Point(0, 62);
-            _workshopGuide.Size = new Size(620, 64);
+            _workshopGuide.Size = new Size(620, 130);
             _workshopGuide.BackColor = Color.FromArgb(231, 243, 255);
-            _workshopGuideText.Location = new Point(14, 5);
-            _workshopGuideText.Size = new Size(592, 54);
-            _workshopGuideText.ForeColor = Color.FromArgb(35, 78, 121);
-            _workshopGuideText.Text =
-                "工坊 DLL 前置：先安装 BepInEx + Bridge；现有订阅只建基线，不会自动开启。\r\n" +
-                "之后新订阅的合法 DLL：Steam 下载完成后的下一次游戏启动自动启用并直接加载。\r\n" +
-                "Steam 管理订阅/更新/卸载；可在游戏“本地”页关闭，关闭后 Bridge 不会再次开启。";
-            _workshopGuide.Controls.Add(_workshopGuideText);
+            _workshopSetupTitle.Location = new Point(14, 6);
+            _workshopSetupTitle.Size = new Size(592, 19);
+            _workshopSetupTitle.Font = new Font(Font, FontStyle.Bold);
+            _workshopSetupTitle.ForeColor = Color.FromArgb(25, 64, 104);
+            _workshopSetupTitle.Text = "第一次使用前的准备";
+            _workshopSetupText.Location = new Point(14, 27);
+            _workshopSetupText.Size = new Size(592, 36);
+            _workshopSetupText.ForeColor = Color.FromArgb(35, 78, 121);
+            _workshopSetupText.Text =
+                "点击“一键安装完整前置”即可。已有订阅不会自动开启；\r\n" +
+                "以后新订阅支持本功能的 DLL Mod，等 Steam 下载完成后，下次启动游戏会自动启用并生效。";
+
+            _workshopManageTitle.Location = new Point(14, 68);
+            _workshopManageTitle.Size = new Size(592, 19);
+            _workshopManageTitle.Font = new Font(Font, FontStyle.Bold);
+            _workshopManageTitle.ForeColor = Color.FromArgb(25, 64, 104);
+            _workshopManageTitle.Text = "如何管理 Mod";
+            _workshopManageText.Location = new Point(14, 89);
+            _workshopManageText.Size = new Size(592, 36);
+            _workshopManageText.ForeColor = Color.FromArgb(35, 78, 121);
+            _workshopManageText.Text =
+                "订阅和取消订阅请在 Steam 创意工坊操作，更新由 Steam 自动完成。\r\n" +
+                "开关 Mod 请进入游戏“本地”页操作，重启后生效；手动关闭后不会被再次自动开启。";
+            _workshopGuide.Controls.AddRange(new Control[]
+            {
+                _workshopSetupTitle, _workshopSetupText, _workshopManageTitle, _workshopManageText,
+            });
 
             // ── BepInEx 缺失提示条 ──
-            _banner.Location = new Point(0, 130);
+            _banner.Location = new Point(0, 196);
             _banner.Size = new Size(620, 34);
             _banner.BackColor = Color.FromArgb(255, 243, 205);
             _banner.Visible = false;
@@ -107,8 +129,8 @@ namespace StudentAgeModManager
             _banner.Controls.Add(_btnInstallBep);
 
             // ── 卡片列表 ──
-            _flow.Location = new Point(14, 130);
-            _flow.Size = new Size(592, 418);
+            _flow.Location = new Point(14, 196);
+            _flow.Size = new Size(592, 570 - _flow.Top);
             _flow.AutoScroll = true;
             _flow.FlowDirection = FlowDirection.TopDown;
             _flow.WrapContents = false;
@@ -181,7 +203,7 @@ namespace StudentAgeModManager
             }
             bool showBanner = !bepinExInstalled || !bridgeCurrent;
             _banner.Visible = showBanner;
-            _flow.Location = new Point(14, showBanner ? 168 : 130);
+            _flow.Location = new Point(14, showBanner ? 234 : 196);
             _flow.Height = 570 - _flow.Top;
         }
 
