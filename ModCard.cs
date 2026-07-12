@@ -133,11 +133,11 @@ namespace StudentAgeModManager
                     ? (hasLegacyInstall
                         ? "Steam 管理 · 检测到旧版直装文件"
                         : "Steam 管理")
-                    : "Steam 条目 · 工坊 ID 无效";
+                    : "Steam 条目 · 工坊信息无效";
                 _status.ForeColor = validWorkshopId
                     ? (hasLegacyInstall ? Color.DarkOrange : Color.RoyalBlue)
                     : Color.Firebrick;
-                _btnMain.Text = validWorkshopId ? "订阅 / 查看工坊" : "工坊 ID 无效";
+                _btnMain.Text = validWorkshopId ? "订阅 / 查看工坊" : "工坊信息无效";
                 _btnMain.Enabled = validWorkshopId;
                 _btnToggle.Visible = false;
                 _btnUninstall.Visible = hasLegacyInstall;

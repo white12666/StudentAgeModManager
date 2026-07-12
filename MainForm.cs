@@ -288,7 +288,7 @@ namespace StudentAgeModManager
                 string workshopId;
                 if (!WorkshopItem.TryGetId(mod, out workshopId))
                 {
-                    MessageBox.Show(this, "索引中的创意工坊 ID 无效，已拒绝回退为直接 DLL 安装。",
+                    MessageBox.Show(this, "索引中的创意工坊 ID 或链接无效，已拒绝回退为直接 DLL 安装。",
                         "工坊条目无效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }

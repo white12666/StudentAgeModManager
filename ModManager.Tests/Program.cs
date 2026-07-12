@@ -16,12 +16,16 @@ namespace StudentAgeModManager.Tests
             "StudentAgeModManager.Resources.StudentAge.WorkshopBridge.dll";
 
         [STAThread]
-        private static int Main()
+        private static int Main(string[] args)
         {
-            var tempRoot = Path.Combine(Path.GetTempPath(),
-                "StudentAgeModManager.Tests." + Guid.NewGuid().ToString("N"));
+            string tempRoot = null;
             try
             {
+                if (args != null && args.Length > 0)
+                    return RunCommand(args);
+
+                tempRoot = Path.Combine(Path.GetTempPath(),
+                    "StudentAgeModManager.Tests." + Guid.NewGuid().ToString("N"));
                 Run(tempRoot);
                 Console.WriteLine("All ModManager integration tests passed.");
                 return 0;
@@ -33,32 +37,35 @@ namespace StudentAgeModManager.Tests
             }
             finally
             {
-                try { Directory.Delete(tempRoot, true); } catch { }
+                if (tempRoot != null)
+                    try { Directory.Delete(tempRoot, true); } catch { }
             }
+        }
+
+        private static int RunCommand(string[] args)
+        {
+            if (args.Length != 2 ||
+                !string.Equals(args[0], "--validate-index", StringComparison.Ordinal))
+            {
+                Console.Error.WriteLine("Usage: StudentAgeModManager.Tests --validate-index <path>");
+                return 2;
+            }
+
+            string path = Path.GetFullPath(args[1]);
+            ModIndex index = IndexClient.ParseAndValidate(File.ReadAllText(path));
+            Console.WriteLine("Index validation passed: " + path + " (" +
+                index.mods.Count + " mods).");
+            return 0;
         }
 
         private static void Run(string tempRoot)
         {
             RunMainFormUiTests(Path.Combine(tempRoot, "main-form-ui"));
             RunModCardUiTests();
+            RunWorkshopReferenceTests();
+            RunIndexValidationTests();
 
-            string workshopId;
-            var workshopEntry = new ModEntry { id = "workshop-test", workshopId = " 001234 " };
-            Assert(WorkshopItem.IsDeclared(workshopEntry), "non-empty workshop ID should select workshop flow");
-            Assert(WorkshopItem.TryGetId(workshopEntry, out workshopId) && workshopId == "1234",
-                "workshop ID should be validated and normalized");
-            Assert(WorkshopItem.PageUrl(workshopId).EndsWith("?id=1234"),
-                "workshop URL should use only the normalized numeric ID");
-            workshopEntry.workshopId = "../plugin.dll";
-            Assert(WorkshopItem.IsDeclared(workshopEntry) && !WorkshopItem.TryGetId(workshopEntry, out workshopId),
-                "an invalid declared workshop ID must not fall back to direct DLL installation");
-            workshopEntry.workshopId = "   ";
-            Assert(WorkshopItem.IsDeclared(workshopEntry) && !WorkshopItem.TryGetId(workshopEntry, out workshopId),
-                "whitespace workshop ID must remain a blocked workshop declaration");
-            workshopEntry.workshopId = string.Empty;
-            Assert(!WorkshopItem.IsDeclared(workshopEntry),
-                "an empty workshop ID should preserve legacy direct-download compatibility");
-            workshopEntry.workshopId = "1234";
+            var workshopEntry = new ModEntry { id = "workshop-test", workshopId = "1234" };
             workshopEntry.installDir = string.Empty;
             Assert(new LocalState(tempRoot).GetStatus(workshopEntry) == ModStatus.NotInstalled,
                 "workshop-only index entries should not require a legacy installDir");
@@ -104,6 +111,219 @@ namespace StudentAgeModManager.Tests
             Assert(!File.Exists(installer.WorkshopBridgePath + ".tmp"),
                 "temporary extraction file should be cleaned up");
         }
+
+        private static void RunWorkshopReferenceTests()
+        {
+            string workshopId;
+            Assert(!WorkshopItem.TryGetId(null, out workshopId) && workshopId == null,
+                "null entries must be rejected without leaving an unassigned ID");
+
+            var legacyNull = new ModEntry { workshopId = null };
+            var legacyEmpty = new ModEntry { workshopId = string.Empty };
+            Assert(!WorkshopItem.IsDeclared(legacyNull) && !WorkshopItem.IsDeclared(legacyEmpty),
+                "null and empty workshop IDs should preserve legacy direct-download compatibility");
+
+            AssertWorkshopReference("1234", "1234");
+            AssertWorkshopReference("  001234  ", "1234");
+            AssertWorkshopReference(
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=1234", "1234");
+            AssertWorkshopReference(
+                "https://steamcommunity.com/sharedfiles/filedetails?id=0001234", "1234");
+            AssertWorkshopReference(
+                "https://steamcommunity.com/workshop/filedetails/?id=1234", "1234");
+            AssertWorkshopReference(
+                "https://steamcommunity.com/workshop/filedetails?id=1234", "1234");
+            AssertWorkshopReference(
+                "https://steamcommunity.com/sharedfiles/filedetails/?source=author&id=0001234&searchtext=hello%20world",
+                "1234");
+            AssertWorkshopReference(
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=%31%32%33", "123");
+            AssertWorkshopReference(
+                "HTTPS://STEAMCOMMUNITY.COM:443/sharedfiles/filedetails/?id=1234", "1234");
+            AssertWorkshopReference("18446744073709551615", "18446744073709551615");
+
+            string[] invalidReferences =
+            {
+                "   ",
+                "../plugin.dll",
+                "0",
+                "0000",
+                "-1",
+                "+1",
+                "１２３",
+                "18446744073709551616",
+                "http://steamcommunity.com/sharedfiles/filedetails/?id=1234",
+                "https://example.com/sharedfiles/filedetails/?id=1234",
+                "https://steamcommunity.com.evil.example/sharedfiles/filedetails/?id=1234",
+                "https://evil.steamcommunity.com/sharedfiles/filedetails/?id=1234",
+                "https://steamcommunity.com./sharedfiles/filedetails/?id=1234",
+                "https://steamcommunity。com/sharedfiles/filedetails/?id=1234",
+                "https://user@steamcommunity.com/sharedfiles/filedetails/?id=1234",
+                "https://steamcommunity.com:444/sharedfiles/filedetails/?id=1234",
+                "https://steamcommunity.com/sharedfiles/other/?id=1234",
+                "https://steamcommunity.com/SharedFiles/filedetails/?id=1234",
+                "https://steamcommunity.com/sharedfiles/x/../filedetails/?id=1234",
+                "https://steamcommunity.com/sharedfiles\\filedetails/?id=1234",
+                "https://steamcommunity.com/sharedfiles/%66iledetails/?id=1234",
+                "https://steamcommunity.com/sharedfiles/filedetails/",
+                "https://steamcommunity.com/sharedfiles/filedetails/?source=author",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=1234&id=5678",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=1234&%69d=5678",
+                "https://steamcommunity.com/sharedfiles/filedetails/?ID=1234",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=0",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=abc",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=18446744073709551616",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=1234#comments",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=12\n34",
+                "https://steamcommunity.com/sharedfiles/filedetails/?id=1234&bad=%ZZ",
+                "steam://url/CommunityFilePage/1234",
+            };
+            foreach (string reference in invalidReferences)
+                AssertInvalidWorkshopReference(reference);
+            AssertInvalidWorkshopReference(new string('1', 2049));
+
+            Assert(WorkshopItem.PageUrl("1234") ==
+                   "https://steamcommunity.com/sharedfiles/filedetails/?id=1234",
+                "trusted Workshop URLs must be constructed from only the canonical numeric ID");
+            AssertPageUrlRejected("001234");
+            AssertPageUrlRejected("0");
+            AssertPageUrlRejected("https://steamcommunity.com/sharedfiles/filedetails/?id=1234");
+        }
+
+        private static void RunIndexValidationTests()
+        {
+            const string validIndex =
+                "{\"schemaVersion\":1,\"mods\":[" +
+                "{\"id\":\"Numeric\",\"workshopId\":\" 000123 \"}," +
+                "{\"id\":\"Url\",\"workshopId\":\"https://steamcommunity.com/workshop/filedetails/?id=000456&source=pr\"}," +
+                "{\"id\":\"Legacy\",\"downloadUrl\":\"https://example.invalid/plugin.dll\"}," +
+                "{\"id\":\"LegacyEmpty\",\"workshopId\":\"\"}," +
+                "{\"id\":\"LegacyNull\",\"workshopId\":null}]}";
+            ModIndex index = IndexClient.ParseAndValidate(validIndex);
+            Assert(index.mods.Count == 5, "a valid mixed index should keep every entry");
+            Assert(index.mods[0].workshopId == "123" && index.mods[1].workshopId == "456",
+                "index validation must normalize numeric and URL workshop references in memory");
+            Assert(!WorkshopItem.IsDeclared(index.mods[2]) &&
+                   !WorkshopItem.IsDeclared(index.mods[3]) &&
+                   !WorkshopItem.IsDeclared(index.mods[4]),
+                "entries with an omitted, empty, or null workshopId must remain legacy entries");
+
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"Example\"},{\"id\":\"example\"}]}",
+                "mods[1]", "mods[0]", "重复");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[" +
+                "{\"id\":\"Numeric\",\"workshopId\":\"00123\"}," +
+                "{\"id\":\"Url\",\"workshopId\":\"https://steamcommunity.com/sharedfiles/filedetails/?id=123\"}]}",
+                "mods[1]", "mods[0]", "Workshop ID 123");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"BadWorkshop\",\"workshopId\":\"   \"}]}",
+                "mods[0]", "BadWorkshop", "workshopId");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"Good\"},null]}",
+                "mods[1]", "null");
+            AssertInvalidIndex("{\"schemaVersion\":2,\"mods\":[]}", "schemaVersion");
+            AssertInvalidIndex("{\"schemaVersion\":1}", "mods");
+            AssertInvalidIndex("null", "有效对象");
+            AssertInvalidIndex("{not-json", "JSON");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"\"}]}",
+                "mods[0]", "id");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":123}]}",
+                "mods[0]", "id", "JSON 字符串");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"ID\":123}]}",
+                "mods[0]", "id", "JSON 字符串");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"NumericToken\",\"workshopId\":123}]}",
+                "mods[0]", "workshopId", "JSON 字符串");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"Exponent\",\"workshopId\":1e3}]}",
+                "mods[0]", "workshopId", "JSON 字符串");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"ExponentAlias\",\"WorkshopId\":1e3}]}",
+                "mods[0]", "workshopId", "JSON 字符串");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[],\"Mods\":[]}",
+                "mods", "仅大小写不同", "重复字段");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"First\",\"ID\":\"Second\"}]}",
+                "mods[0]", "id", "仅大小写不同", "重复字段");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"DuplicateWorkshopField\",\"workshopId\":\"123\",\"WorkshopId\":\"456\"}]}",
+                "mods[0]", "workshopId", "仅大小写不同", "重复字段");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\" padded \"}]}",
+                "mods[0]", "首尾空白");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"bad\\u0001id\"}]}",
+                "mods[0]", "控制字符");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"" +
+                new string('a', 129) + "\"}]}",
+                "mods[0]", "128");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[" +
+                "{\"id\":\"Good\",\"workshopId\":\"123\"}," +
+                "{\"id\":\"Bad\",\"workshopId\":\"https://evil.example/?id=456\"}," +
+                "{\"id\":\"NeverReached\",\"workshopId\":\"789\"}]}",
+                "mods[1]", "Bad", "workshopId");
+        }
+
+        private static void AssertWorkshopReference(string reference, string expectedId)
+        {
+            var entry = new ModEntry { id = "reference-test", workshopId = reference };
+            string actualId;
+            Assert(WorkshopItem.IsDeclared(entry),
+                "non-empty workshop references must select the Workshop flow: " + reference);
+            Assert(WorkshopItem.TryGetId(entry, out actualId) && actualId == expectedId,
+                "valid workshop reference should normalize to " + expectedId + ": " + reference);
+            Assert(WorkshopItem.PageUrl(actualId) ==
+                   "https://steamcommunity.com/sharedfiles/filedetails/?id=" + expectedId,
+                "the index-provided reference must never be opened directly: " + reference);
+        }
+
+        private static void AssertInvalidWorkshopReference(string reference)
+        {
+            var entry = new ModEntry { id = "invalid-reference", workshopId = reference };
+            string ignored;
+            Assert(WorkshopItem.IsDeclared(entry) && !WorkshopItem.TryGetId(entry, out ignored),
+                "invalid declared workshop reference must remain blocked: " + reference);
+        }
+
+        private static void AssertPageUrlRejected(string value)
+        {
+            bool rejected = false;
+            try
+            {
+                WorkshopItem.PageUrl(value);
+            }
+            catch (ArgumentException)
+            {
+                rejected = true;
+            }
+            Assert(rejected, "PageUrl must reject non-canonical input: " + value);
+        }
+
+        private static void AssertInvalidIndex(string json, params string[] expectedFragments)
+        {
+            bool rejected = false;
+            try
+            {
+                IndexClient.ParseAndValidate(json);
+            }
+            catch (InvalidDataException ex)
+            {
+                rejected = true;
+                foreach (string fragment in expectedFragments)
+                    Assert(ex.Message.Contains(fragment),
+                        "index rejection should mention '" + fragment + "': " + ex.Message);
+            }
+            Assert(rejected, "invalid index must be rejected as a whole");
+        }
+
 
         private static void RunMainFormUiTests(string root)
         {
@@ -266,8 +486,8 @@ namespace StudentAgeModManager.Tests
                 card.Bind(workshopEntry, ModStatus.NotInstalled, null);
                 card.SetBusy(true);
                 card.SetBusy(false);
-                Assert(main.Visible && !main.Enabled && main.Text == "工坊 ID 无效",
-                    "invalid declared workshop ID must remain visibly blocked after busy state");
+                Assert(main.Visible && !main.Enabled && main.Text == "工坊信息无效",
+                    "invalid declared workshop reference must remain visibly blocked after busy state");
                 Assert(!toggle.Visible && !toggle.Enabled &&
                        !uninstall.Visible && !uninstall.Enabled &&
                        !home.Visible && !home.Enabled,

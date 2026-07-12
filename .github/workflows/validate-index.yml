@@ -1,0 +1,39 @@
+name: Validate central mod index
+
+on:
+  pull_request:
+    paths:
+      - "mods.json"
+      - "Core/IndexClient.cs"
+      - "Core/Models.cs"
+      - "ModManager.Tests/**"
+      - "StudentAgeModManager.csproj"
+      - ".github/workflows/validate-index.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-index:
+    name: Build and validate mods.json
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build Release
+        run: dotnet build -c Release
+
+      - name: Run Mod Manager validation regressions
+        run: dotnet run --project ModManager.Tests/StudentAgeModManager.Tests.csproj -c Release
+
+      - name: Validate central index with production rules
+        run: dotnet run --project ModManager.Tests/StudentAgeModManager.Tests.csproj -c Release -- --validate-index mods.json
