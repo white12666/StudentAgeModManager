@@ -41,7 +41,7 @@ Steam Workshop verification passed: ...
 
 - [ ] `mods.json` 中的 `id` 和 Workshop ID 没有与现有条目重复；
 - [ ] Workshop ID 写在双引号中，例如 `"1234567890"`；
-- [ ] PR 的目标分支是 `test`；
+- [ ] PR 的目标分支是 `main`；
 - [ ] 本 PR 没有提交 DLL、EXE、Steam 下载内容、`bin/`、`obj/` 或 `release_assets/`；
 - [ ] 上面的 Steam 页面、源码和授权信息真实有效。
 

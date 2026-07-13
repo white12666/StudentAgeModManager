@@ -14,7 +14,7 @@ namespace StudentAgeModManager
     public class MainForm : Form
     {
         private const string ContributionUrl =
-            "https://github.com/white12666/StudentAgeModManager/blob/test/CONTRIBUTING.md";
+            "https://github.com/white12666/StudentAgeModManager/blob/main/CONTRIBUTING.md";
         private static readonly Font SectionFont =
             new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
         private static readonly Font SubmissionFont =

@@ -10,11 +10,9 @@ namespace StudentAgeModManager.Core
     /// <summary>拉取并解析中央索引 mods.json；成功后把索引里的镜像列表回写给 Downloader。</summary>
     public class IndexClient
     {
-        /// <summary>
-        /// test 渠道固定读取 test 分支索引；合并并发布到稳定渠道时应与代码一起切回 main。
-        /// </summary>
+        /// <summary>正式渠道固定读取 main 分支索引。</summary>
         public const string DefaultIndexUrl =
-            "https://raw.githubusercontent.com/white12666/StudentAgeModManager/test/mods.json";
+            "https://raw.githubusercontent.com/white12666/StudentAgeModManager/main/mods.json";
 
         private readonly Downloader _downloader;
         private readonly WorkshopMetadataService _workshopMetadata;

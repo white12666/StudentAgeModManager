@@ -254,4 +254,4 @@ BepInEx/ModManager/workshop-metadata.json
 - [面向 Mod 作者的投稿教程](CONTRIBUTING.md)
 - [开发与维护说明](DEVELOPMENT.md)
 
-当前 `test` 渠道读取 `test` 分支中的 `mods.json`。投稿时请把 PR 的目标分支选择为 `test`。
+正式渠道读取 `main` 分支中的 `mods.json`。投稿时请把 PR 的目标分支选择为 `main`。

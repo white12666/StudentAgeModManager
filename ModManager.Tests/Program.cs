@@ -214,9 +214,9 @@ namespace StudentAgeModManager.Tests
 
         private static void RunIndexValidationTests()
         {
-            Assert(IndexClient.DefaultIndexUrl.EndsWith("/test/mods.json",
+            Assert(IndexClient.DefaultIndexUrl.EndsWith("/main/mods.json",
                     StringComparison.Ordinal),
-                "test-channel builds must read the test index until promoted to main");
+                "stable-channel builds must read the main index");
             const string validIndex =
                 "{\"schemaVersion\":1,\"mods\":[" +
                 "{\"id\":\"Numeric\",\"workshopId\":\" 000123 \"}," +
@@ -1202,9 +1202,9 @@ namespace StudentAgeModManager.Tests
                     "the fixed footer should explain 收录, index display metadata, and contribution");
                 Assert(submissionLink.Links.Count == 1 &&
                        string.Equals(submissionLink.Links[0].LinkData as string,
-                           "https://github.com/white12666/StudentAgeModManager/blob/test/CONTRIBUTING.md",
+                           "https://github.com/white12666/StudentAgeModManager/blob/main/CONTRIBUTING.md",
                            StringComparison.Ordinal),
-                    "the author submission link should target the test-branch contribution guide");
+                    "the author submission link should target the main-branch contribution guide");
                 AssertTextFits(setupText,
                     "first-use instructions must fit without clipping");
                 AssertTextFits(manageText,
