@@ -1,30 +1,41 @@
 {
-    "schemaVersion":  1,
-    "updatedAt":  "2026-07-05",
-    "mirrors":  [
-                    "https://ghproxy.net/",
-                    "https://gh-proxy.com/",
-                    "https://ghfast.top/"
-                ],
-    "manager":  {
-                    "version":  "1.0.0",
-                    "downloadUrl":  "https://github.com/white12666/StudentAgeModManager/releases/latest"
-                },
-    "bepinex":  {
-                    "version":  "5.4.23",
-                    "downloadUrl":  "https://github.com/white12666/StudentAgeModManager/releases/download/bepinex/BepInEx-5.4.23-package.zip"
-                },
-    "mods":  [
-                 {
-                     "id":  "StudentAgeEditorPlus",
-                     "name":  "编辑器增强 Plus",
-                     "description":  "修复官方MOD编辑器的多处bug并增强功能：字段补全、预览可见化、搜索等",
-                     "repo":  "white12666/StudentAgeEditorPlus",
-                     "version":  "v0.2.0",
-                     "downloadUrl":  "https://github.com/white12666/StudentAgeEditorPlus/releases/download/v0.2.0/StudentAgeEditorPlus.dll",
-                     "assetType":  "dll",
-                     "installDir":  "BepInEx/plugins/StudentAgeEditorPlus",
-                     "workshopId":  ""
-                 }
-             ]
+	"schemaVersion": 1,
+	"updatedAt": "2026-07-13",
+	"mirrors": [
+		"https://ghproxy.net/",
+		"https://gh-proxy.com/",
+		"https://ghfast.top/"
+	],
+	"manager": {
+		"version": "1.0.0",
+		"downloadUrl": "https://github.com/white12666/StudentAgeModManager/releases/latest"
+	},
+	"bepinex": {
+		"version": "5.4.23",
+		"downloadUrl": "https://github.com/white12666/StudentAgeModManager/releases/download/bepinex/BepInEx-5.4.23-package.zip"
+	},
+	"mods": [
+		{
+			"id": "StudentAgeEditorPlus",
+			"name": "编辑器增强 Plus",
+			"description": "修复官方MOD编辑器的多处bug并增强功能：字段补全、预览可见化、搜索等",
+			"repo": "white12666/StudentAgeEditorPlus",
+			"version": "v0.2.0",
+			"downloadUrl": "https://github.com/white12666/StudentAgeEditorPlus/releases/download/v0.2.0/StudentAgeEditorPlus.dll",
+			"assetType": "dll",
+			"installDir": "BepInEx/plugins/StudentAgeEditorPlus",
+			"workshopId": ""
+		},
+		{
+			"id": "LFBetterMusic",
+			"name": "更好的音乐演出效果",
+			"description": "为《学生时代》提供独立音乐通道、唱歌演出、浮动歌词、双语歌词、句段播放及音乐接续等功能",
+			"repo": "lfwing/StudentAge-LFBettermusic",
+			"version": "1.6.2",
+			"downloadUrl": "https://github.com/lfwing/StudentAge-LFBettermusic/releases/download/1.6.2/LFBetterMusicPlugin.dll",
+			"assetType": "dll",
+			"installDir": "BepInEx/plugins/LFBetterMusic",
+			"workshopId": "3763938041"
+		}
+	]
 }

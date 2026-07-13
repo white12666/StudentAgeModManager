@@ -53,6 +53,7 @@ Mod 的改动需要**完全重启游戏**后才生效（不是回主菜单）。
 | Mod | 说明 |
 |---|---|
 | [编辑器增强 Plus](https://github.com/white12666/StudentAgeEditorPlus) | 修复官方 MOD 编辑器的多处 bug 并增强功能：字段补全、预览可见化、搜索等 |
+| [更好的音乐演出效果](https://github.com/lfwing/StudentAge-LFBettermusic) | 提供独立音乐通道、唱歌演出、浮动歌词、双语歌词、句段播放及音乐接续等功能 |
 
 以后新 Mod 会自动出现在管理器列表里，无需更新管理器本身。
 
