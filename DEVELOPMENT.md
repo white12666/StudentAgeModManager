@@ -187,6 +187,8 @@ dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Rel
 
 真实 Steam 数据只能复制到临时目录后测试，不要直接修改真实 `_mod` 或 `_workshop_bridge_state.json`。
 
+进行真实游戏启动验证时，应先正常启动 Steam，再从 Steam 客户端启动游戏。不要在 Steam 未运行时直接执行 `StudentAge.exe`：Steam 可能继承 Doorstop 写入的 `DOORSTOP_*` 状态，导致后续启动跳过 BepInEx。若发生此问题，必须完整退出并重启 Steam；不要用 `steam_appid.txt` 或仅修改 `ignore_disable_switch` 代替。参见 [UnityDoorstop #34](https://github.com/NeighTools/UnityDoorstop/issues/34)。
+
 ## 发布
 
 普通用户只需要 `ModManager.exe`。生成完整发布资产：
