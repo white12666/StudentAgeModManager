@@ -32,14 +32,8 @@ namespace StudentAgeModManager.Core
         public string id { get; set; }
         public string name { get; set; }
         public string description { get; set; }
-        /// <summary>owner/repo，用于「主页」按钮。</summary>
-        public string repo { get; set; }
         public string version { get; set; }
-        public string downloadUrl { get; set; }
-        /// <summary>"dll" 单文件放入 installDir；"zip" 解压到 installDir。</summary>
-        public string assetType { get; set; }
-        /// <summary>相对游戏根目录，如 BepInEx/plugins/StudentAgeEditorPlus。</summary>
-        public string installDir { get; set; }
+        /// <summary>Steam Workshop ID；索引条目必须声明。</summary>
         public string workshopId { get; set; }
     }
 
@@ -49,9 +43,9 @@ namespace StudentAgeModManager.Core
         private const int MaxReferenceLength = 2048;
         private const string SteamCommunityHost = "steamcommunity.com";
 
-        // Empty/null keeps compatibility with legacy direct-download entries. Any
-        // other value, including whitespace or malformed text, is a declared workshop
-        // item and must never fall back to downloading executable content directly.
+        // Any non-empty value, including whitespace or malformed text, is a declared
+        // workshop item. Validation rejects malformed values and never falls back to
+        // downloading executable content directly.
         public static bool IsDeclared(ModEntry entry)
         {
             return entry != null && !string.IsNullOrEmpty(entry.workshopId);
@@ -315,21 +309,39 @@ namespace StudentAgeModManager.Core
         }
     }
 
-    /// <summary>本地 installed.json：modId -> 安装状态。</summary>
-    public class InstalledMod
+    public enum LocalPluginSource
     {
-        public string version { get; set; }
-        public List<string> files { get; set; }
-        public bool enabled { get; set; } = true;
+        Local,
+        SteamWorkshop,
     }
 
-    /// <summary>mod 在界面上的综合状态。</summary>
-    public enum ModStatus
+    /// <summary>从 DLL 元数据中只读提取的 BepInEx 插件声明。</summary>
+    [Serializable]
+    public sealed class ScannedPlugin
     {
-        NotInstalled,      // 未安装
-        UpToDate,          // 已装且最新
-        UpdateAvailable,   // 已装但有新版
-        InstalledUnknown,  // 目录里有文件但无记录（存量用户）
-        Disabled,          // 已禁用
+        public string Guid { get; set; }
+        public string Name { get; set; }
+        public string Version { get; set; }
+        public string DllFileName { get; set; }
+    }
+
+    /// <summary>
+    /// 一个可独立启停的插件单元：plugins 根目录中的单个 DLL、一个目录，
+    /// 或 `.workshop/&lt;id&gt;` 工坊联接。
+    /// </summary>
+    public sealed class LocalPluginUnit
+    {
+        public string UnitKey { get; set; }
+        public string DisplayName { get; set; }
+        public string DisplayVersion { get; set; }
+        public string RelativePath { get; set; }
+        public string EnabledRelativePath { get; set; }
+        public bool IsDirectory { get; set; }
+        public bool IsDisabled { get; set; }
+        public bool HasPathConflict { get; set; }
+        public LocalPluginSource Source { get; set; }
+        public string WorkshopId { get; set; }
+        public int DllCount { get; set; }
+        public List<ScannedPlugin> Plugins { get; set; } = new List<ScannedPlugin>();
     }
 }

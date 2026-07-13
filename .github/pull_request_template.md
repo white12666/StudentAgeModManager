@@ -1,34 +1,48 @@
-## 投稿内容
+## Mod 基本信息
 
 - Mod 名称：
-- `mods.json` 中的 Mod ID：
-- Steam 工坊页面（真实链接）：
-- 名称/说明来源（索引显式填写，或留空由 Steam 补全）：
+- Workshop ID：
+- Steam 工坊页面：
 - 源码仓库：
-- 作者与许可证/分发授权：
-- 本次新增或更新的内容：
+- 作者：
+- 许可证或分发授权：
+- 这是：新增收录 / 更新已有条目（删除不适用项）
 
-## 测试结果
+## 管理器中的显示方式
 
-请说明已验证的项目（订阅、下载完成后的下一次启动、更新、取消订阅等），并粘贴本地索引验证结果：
+请选择一种：
+
+- [ ] 名称和简介直接使用 Steam 工坊内容；
+- [ ] 在 `mods.json` 中自定义名称和简介。
+
+如果选择自定义，请填写：
+
+- 显示名称：
+- 简短简介：
+
+## 我已经测试
+
+- [ ] 工坊项目已经公开，其他玩家可以打开；
+- [ ] 项目属于《学生时代》（AppID `1991040`）；
+- [ ] 工坊包中有 `workshop-plugin.json`；
+- [ ] DLL 位于 `BepInEx/plugins`；
+- [ ] 订阅并下载完成后，启动游戏可以正常接入；
+- [ ] Mod 的主要功能已经测试；
+- [ ] 关闭或取消订阅后，下次启动不会继续加载。
+
+如果运行过本地索引检查，可以把结果粘贴在这里；没有本地开发环境也可以留空，GitHub 会自动检查：
 
 ```text
 Index validation passed: ...
 Steam Workshop verification passed: ...
 ```
 
-## 检查清单
+## 提交前确认
 
-- [ ] `workshopId` 是纯数字 ID，或两种允许的 `https://steamcommunity.com/.../filedetails/?id=...` 官方链接之一。
-- [ ] 链接只使用官方域名、默认 HTTPS 端口，且恰好有一个小写 `id` 参数；没有 user-info 或 fragment。
-- [ ] Mod ID 不与现有条目重复（忽略大小写）。
-- [ ] Workshop ID 规范化后不与现有条目重复。
-- [ ] 工坊项目已公开可读，并且属于 StudentAge AppID `1991040`。
-- [ ] 我已明确选择索引文案；与 Steam 重复的 `name`/`description` 可以省略、设为 `null` 或留空，非空索引文案将始终优先。
-- [ ] 工坊包包含合法的 `workshop-plugin.json` 和固定的 `BepInEx/plugins` 目录。
-- [ ] 已提供可审查源码及作者/许可证或分发授权信息。
-- [ ] 已运行 `dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Release -- --validate-index .\mods.json`。
-- [ ] 已运行 `dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Release -- --validate-index .\mods.json --verify-workshop` 并粘贴成功结果。
-- [ ] 本 PR 未提交 DLL、可执行文件、Steam 内容、`bin/`、`obj/` 或 `release_assets/`。
+- [ ] `mods.json` 中的 `id` 和 Workshop ID 没有与现有条目重复；
+- [ ] Workshop ID 写在双引号中，例如 `"1234567890"`；
+- [ ] PR 的目标分支是 `test`；
+- [ ] 本 PR 没有提交 DLL、EXE、Steam 下载内容、`bin/`、`obj/` 或 `release_assets/`；
+- [ ] 上面的 Steam 页面、源码和授权信息真实有效。
 
-提交前请阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)。任一非法或重复条目都会让运行时和 PR CI 拒绝整份索引。
+不确定如何填写时，请查看面向 Mod 作者的 [投稿教程](../CONTRIBUTING.md)。自动检查失败后可以直接继续修改当前 PR，不需要重新提交。

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -98,12 +99,9 @@ namespace StudentAgeModManager.Tests
             RunIndexValidationTests();
             RunWorkshopMetadataTests(Path.Combine(tempRoot, "workshop-metadata"));
             RunMainFormUiTests(Path.Combine(tempRoot, "main-form-ui"));
+            RunWheelFlowLayoutPanelTests();
             RunModCardUiTests();
-
-            var workshopEntry = new ModEntry { id = "workshop-test", workshopId = "1234" };
-            workshopEntry.installDir = string.Empty;
-            Assert(new LocalState(tempRoot).GetStatus(workshopEntry) == ModStatus.NotInstalled,
-                "workshop-only index entries should not require a legacy installDir");
+            RunLocalPluginScannerTests(Path.Combine(tempRoot, "local-plugins"));
 
             var gameRoot = Path.Combine(tempRoot, "StudentAge");
             Directory.CreateDirectory(Path.Combine(gameRoot, "BepInEx", "core"));
@@ -111,18 +109,6 @@ namespace StudentAgeModManager.Tests
 
             var installer = new ModInstaller(new LocalState(gameRoot), new Downloader());
             Assert(installer.IsBepInExInstalled(), "fake BepInEx installation should be detected");
-
-            bool directInstallBlocked = false;
-            try
-            {
-                installer.InstallAsync(workshopEntry, null).GetAwaiter().GetResult();
-            }
-            catch (InvalidOperationException ex)
-            {
-                directInstallBlocked = ex.Message.Contains("Steam");
-            }
-            Assert(directInstallBlocked,
-                "installer API must reject direct downloads for every declared workshop item");
 
             Assert(!installer.IsWorkshopBridgeInstalled(), "bridge should initially be absent");
             Assert(!installer.IsWorkshopBridgeCurrent(), "absent bridge cannot be current");
@@ -156,7 +142,7 @@ namespace StudentAgeModManager.Tests
             var legacyNull = new ModEntry { workshopId = null };
             var legacyEmpty = new ModEntry { workshopId = string.Empty };
             Assert(!WorkshopItem.IsDeclared(legacyNull) && !WorkshopItem.IsDeclared(legacyEmpty),
-                "null and empty workshop IDs should preserve legacy direct-download compatibility");
+                "null and empty workshop IDs are undeclared and must be rejected by index validation");
 
             AssertWorkshopReference("1234", "1234");
             AssertWorkshopReference("  001234  ", "1234");
@@ -228,24 +214,31 @@ namespace StudentAgeModManager.Tests
 
         private static void RunIndexValidationTests()
         {
+            Assert(IndexClient.DefaultIndexUrl.EndsWith("/test/mods.json",
+                    StringComparison.Ordinal),
+                "test-channel builds must read the test index until promoted to main");
             const string validIndex =
                 "{\"schemaVersion\":1,\"mods\":[" +
                 "{\"id\":\"Numeric\",\"workshopId\":\" 000123 \"}," +
-                "{\"id\":\"Url\",\"workshopId\":\"https://steamcommunity.com/workshop/filedetails/?id=000456&source=pr\"}," +
-                "{\"id\":\"Legacy\",\"downloadUrl\":\"https://example.invalid/plugin.dll\"}," +
-                "{\"id\":\"LegacyEmpty\",\"workshopId\":\"\"}," +
-                "{\"id\":\"LegacyNull\",\"workshopId\":null}]}";
+                "{\"id\":\"Url\",\"workshopId\":\"https://steamcommunity.com/workshop/filedetails/?id=000456&source=pr\"}]}";
             ModIndex index = IndexClient.ParseAndValidate(validIndex);
-            Assert(index.mods.Count == 5, "a valid mixed index should keep every entry");
+            Assert(index.mods.Count == 2, "a valid index should keep every Workshop entry");
             Assert(index.mods[0].workshopId == "123" && index.mods[1].workshopId == "456",
                 "index validation must normalize numeric and URL workshop references in memory");
-            Assert(!WorkshopItem.IsDeclared(index.mods[2]) &&
-                   !WorkshopItem.IsDeclared(index.mods[3]) &&
-                   !WorkshopItem.IsDeclared(index.mods[4]),
-                "entries with an omitted, empty, or null workshopId must remain legacy entries");
 
             AssertInvalidIndex(
-                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"Example\"},{\"id\":\"example\"}]}",
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"Legacy\",\"downloadUrl\":\"https://example.invalid/plugin.dll\"}]}",
+                "mods[0]", "workshopId", "不再支持");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"LegacyEmpty\",\"workshopId\":\"\"}]}",
+                "mods[0]", "workshopId", "不再支持");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"LegacyNull\",\"workshopId\":null}]}",
+                "mods[0]", "workshopId", "不再支持");
+            AssertInvalidIndex(
+                "{\"schemaVersion\":1,\"mods\":[" +
+                "{\"id\":\"Example\",\"workshopId\":\"1\"}," +
+                "{\"id\":\"example\",\"workshopId\":\"2\"}]}",
                 "mods[1]", "mods[0]", "重复");
             AssertInvalidIndex(
                 "{\"schemaVersion\":1,\"mods\":[" +
@@ -256,7 +249,7 @@ namespace StudentAgeModManager.Tests
                 "{\"schemaVersion\":1,\"mods\":[{\"id\":\"BadWorkshop\",\"workshopId\":\"   \"}]}",
                 "mods[0]", "BadWorkshop", "workshopId");
             AssertInvalidIndex(
-                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"Good\"},null]}",
+                "{\"schemaVersion\":1,\"mods\":[{\"id\":\"Good\",\"workshopId\":\"1\"},null]}",
                 "mods[1]", "null");
             AssertInvalidIndex("{\"schemaVersion\":2,\"mods\":[]}", "schemaVersion");
             AssertInvalidIndex("{\"schemaVersion\":1}", "mods");
@@ -680,9 +673,6 @@ namespace StudentAgeModManager.Tests
                 {
                     id = "missing-both",
                     workshopId = "101",
-                    installDir = "BepInEx/plugins/existing",
-                    downloadUrl = "https://index.invalid/existing.dll",
-                    assetType = "dll",
                 },
                 new ModEntry
                 {
@@ -731,10 +721,6 @@ namespace StudentAgeModManager.Tests
             Assert(index.mods[4].name == "Live Title 105" &&
                    index.mods[4].description == "Live description 105",
                 "empty and whitespace-only display fields should be treated as missing");
-            Assert(index.mods[0].installDir == "BepInEx/plugins/existing" &&
-                   index.mods[0].downloadUrl == "https://index.invalid/existing.dll" &&
-                   index.mods[0].assetType == "dll",
-                "Steam metadata must never alter index-controlled paths, downloads, or install mode");
             for (int i = 0; i < index.mods.Count; i++)
                 Assert(index.mods[i].workshopId == (101 + i).ToString(CultureInfo.InvariantCulture),
                     "metadata enrichment must never change a normalized Workshop ID");
@@ -1183,32 +1169,53 @@ namespace StudentAgeModManager.Tests
                 var setupText = GetControl<Label>(form, "_workshopSetupText");
                 var manageTitle = GetControl<Label>(form, "_workshopManageTitle");
                 var manageText = GetControl<Label>(form, "_workshopManageText");
+                var submissionFooter = GetControl<Panel>(form, "_submissionFooter");
+                var submissionLink = GetControl<LinkLabel>(form, "_workshopSubmissionLink");
                 var banner = GetControl<Panel>(form, "_banner");
                 var flow = GetControl<FlowLayoutPanel>(form, "_flow");
                 var status = GetControl<Label>(form, "_lblStatus");
 
                 Assert(setupTitle.Text == "第一次使用前的准备" && setupTitle.Font.Bold,
-                    "workshop guide should use a clear first-use heading");
-                Assert(setupText.Text.Contains("点击“一键安装完整前置”即可") &&
-                       setupText.Text.Contains("已有订阅不会自动开启"),
-                    "first-use text should explain the one-click setup and preserve existing subscriptions");
-                Assert(setupText.Text.Contains("支持本功能的 DLL Mod") &&
-                       setupText.Text.Contains("Steam 下载完成后，下次启动游戏") &&
-                       setupText.Text.Contains("自动启用并生效"),
-                    "first-use text should accurately explain when supported DLL mods become active");
+                    "workshop guide should keep the original first-use heading");
+                Assert(setupText.Text.Contains("点击“一键安装完整前置”") &&
+                       setupText.Text.Contains("中央索引只是推荐目录") &&
+                       setupText.Text.Contains("不是加载白名单"),
+                    "first-use text should retain the original setup and index explanation");
+                Assert(setupText.Text.Contains("任何合法工坊 DLL 均可接入") &&
+                       setupText.Text.Contains("下载完成后的下一次启动自动启用") &&
+                       !setupText.Text.Contains("“收录”只表示进入推荐目录"),
+                    "the original first-use text should remain unchanged by the submission hint");
                 Assert(manageTitle.Text == "如何管理 Mod" && manageTitle.Font.Bold,
                     "workshop guide should use a clear management heading");
-                Assert(manageText.Text.Contains("Steam 创意工坊") &&
-                       manageText.Text.Contains("更新由 Steam 自动完成"),
-                    "management text should explain Steam subscription and update ownership");
-                Assert(manageText.Text.Contains("游戏“本地”页") &&
-                       manageText.Text.Contains("重启后生效") &&
-                       manageText.Text.Contains("手动关闭后不会被再次自动开启"),
-                    "management text should explain the native switch and persistent manual disable");
+                Assert(manageText.Text.Contains("订阅/取消在 Steam") &&
+                       manageText.Text.Contains("游戏“本地”页") &&
+                       manageText.Text.Contains("未收录但已接入的工坊也会显示"),
+                    "management text should retain its original Workshop visibility explanation");
+                Assert(manageText.Text.Contains("手动 DLL") &&
+                       manageText.Text.Contains("本地 · 未收录") &&
+                       manageText.Text.Contains("重启后生效"),
+                    "management text should distinguish manually installed local plugins");
+                Assert(submissionLink.Text.Contains("“收录”只表示进入 Git 推荐目录") &&
+                       submissionLink.Text.Contains("可自定义显示名称与简介") &&
+                       submissionLink.Text.Contains("欢迎 Mod 作者") &&
+                       submissionLink.Text.Contains("GitHub 提交收录"),
+                    "the fixed footer should explain 收录, index display metadata, and contribution");
+                Assert(submissionLink.Links.Count == 1 &&
+                       string.Equals(submissionLink.Links[0].LinkData as string,
+                           "https://github.com/white12666/StudentAgeModManager/blob/test/CONTRIBUTING.md",
+                           StringComparison.Ordinal),
+                    "the author submission link should target the test-branch contribution guide");
                 AssertTextFits(setupText,
                     "first-use instructions must fit without clipping");
                 AssertTextFits(manageText,
                     "management instructions must fit without clipping");
+                Assert(!submissionLink.Text.Contains("\r") &&
+                       !submissionLink.Text.Contains("\n"),
+                    "the contribution footer must stay on one line");
+                Assert(Math.Abs(submissionLink.Font.Size - 8f) < 0.01f,
+                    "the contribution footer should use the requested one-step-smaller 8pt font");
+                AssertSingleLineFits(submissionLink,
+                    "submission hint must fit on one line at 8pt");
                 Assert(setupTitle.Bottom <= setupText.Top &&
                        setupText.Bottom <= manageTitle.Top &&
                        manageTitle.Bottom <= manageText.Top &&
@@ -1216,8 +1223,13 @@ namespace StudentAgeModManager.Tests
                     "workshop guide sections must not overlap or leave the panel");
                 Assert(guide.Bottom <= banner.Top,
                     "workshop guide must not overlap the BepInEx banner");
-                Assert(guide.Bottom <= flow.Top && flow.Bottom <= status.Top,
-                    "initial workshop guide/list/status layout must not overlap");
+                Assert(submissionLink.Parent == submissionFooter &&
+                       flow.Bottom + 4 == submissionFooter.Top &&
+                       submissionFooter.Bottom + 4 == status.Top &&
+                       submissionLink.Top == 3,
+                    "the smaller contribution line should sit lower with tight fixed gaps above the status bar");
+                Assert(guide.Bottom <= flow.Top,
+                    "the initial Mod list must remain below the top guide");
 
                 var gameRoot = Path.Combine(root, "StudentAge");
                 Directory.CreateDirectory(gameRoot);
@@ -1227,8 +1239,8 @@ namespace StudentAgeModManager.Tests
                 InvokePrivate(form, "UpdateBepInExUi");
                 Assert(flow.Top == 234 && banner.Bottom <= flow.Top,
                     "visible prerequisite banner must remain above the mod list");
-                Assert(flow.Bottom <= status.Top,
-                    "banner-visible mod list must remain above the status bar");
+                Assert(flow.Bottom + 4 == submissionFooter.Top,
+                    "banner-visible Mod list must end before the fixed contribution footer");
 
                 Directory.CreateDirectory(Path.Combine(gameRoot, "BepInEx", "core"));
                 File.WriteAllBytes(Path.Combine(gameRoot, "winhttp.dll"), new byte[] { 1 });
@@ -1236,73 +1248,183 @@ namespace StudentAgeModManager.Tests
                 InvokePrivate(form, "UpdateBepInExUi");
                 Assert(flow.Top == 196 && guide.Bottom <= flow.Top,
                     "hidden prerequisite banner must leave the mod list below the guide");
-                Assert(flow.Bottom <= status.Top,
-                    "banner-hidden mod list must remain above the status bar");
+                Assert(flow.Bottom + 4 == submissionFooter.Top,
+                    "banner-hidden Mod list must end before the fixed contribution footer");
+                Assert(flow is WheelFlowLayoutPanel && flow.AutoScroll,
+                    "the Mod list should use the wheel-aware auto-scrolling panel");
+
+                var connected = new LocalPluginUnit
+                {
+                    UnitKey = ".workshop/100",
+                    DisplayName = "Connected Listed",
+                    DisplayVersion = "1.0.0",
+                    RelativePath = "BepInEx\\plugins\\.workshop\\100",
+                    EnabledRelativePath = "BepInEx\\plugins\\.workshop\\100",
+                    IsDirectory = true,
+                    Source = LocalPluginSource.SteamWorkshop,
+                    WorkshopId = "100",
+                    DllCount = 1,
+                    Plugins = new List<ScannedPlugin>
+                    {
+                        new ScannedPlugin { Name = "Connected Listed", Version = "1.0.0" },
+                    },
+                };
+                var unindexed = new LocalPluginUnit
+                {
+                    UnitKey = ".workshop/999",
+                    DisplayName = "Unindexed Connected",
+                    DisplayVersion = "1.0.0",
+                    RelativePath = "BepInEx\\plugins\\.workshop\\999",
+                    EnabledRelativePath = "BepInEx\\plugins\\.workshop\\999",
+                    IsDirectory = true,
+                    Source = LocalPluginSource.SteamWorkshop,
+                    WorkshopId = "999",
+                    DllCount = 1,
+                    Plugins = new List<ScannedPlugin>
+                    {
+                        new ScannedPlugin { Name = "Unindexed Connected", Version = "1.0.0" },
+                    },
+                };
+                var local = new LocalPluginUnit
+                {
+                    UnitKey = "LocalOnly",
+                    DisplayName = "Local Only",
+                    DisplayVersion = "1.0.0",
+                    RelativePath = "BepInEx\\plugins\\LocalOnly",
+                    EnabledRelativePath = "BepInEx\\plugins\\LocalOnly",
+                    IsDirectory = true,
+                    Source = LocalPluginSource.Local,
+                    DllCount = 1,
+                    Plugins = new List<ScannedPlugin>
+                    {
+                        new ScannedPlugin { Name = "Local Only", Version = "1.0.0" },
+                    },
+                };
+                SetPrivateField(form, "_index", CreateWorkshopIndex(
+                    new ModEntry { id = "listed-connected", name = "Listed Connected", workshopId = "100" },
+                    new ModEntry { id = "listed-unconnected", name = "Listed Unconnected", workshopId = "200" }));
+                SetPrivateField(form, "_localUnits", new List<LocalPluginUnit>
+                    { connected, unindexed, local });
+                InvokePrivate(form, "RenderList");
+
+                List<ModCard> cards = flow.Controls.OfType<ModCard>().ToList();
+                Assert(cards.Count == 4,
+                    "one listed+connected Workshop item must merge instead of producing a duplicate fifth card");
+                ModCard merged = cards.Single(card =>
+                    card.Entry != null && card.Entry.id == "listed-connected");
+                Assert(ReferenceEquals(merged.LocalUnit, connected) &&
+                       merged.StatusText == "Steam 工坊 · 已收录 · 已接入",
+                    "RenderList should merge an indexed item with its matching Workshop unit by ID; " +
+                    "sameUnit=" + ReferenceEquals(merged.LocalUnit, connected) +
+                    ", status=" + merged.StatusText);
+                Assert(cards.Single(card => card.Entry != null &&
+                           card.Entry.id == "listed-unconnected").LocalUnit == null,
+                    "an indexed item without a link should remain a single unconnected catalog card");
+                Assert(cards.Count(card => card.LocalUnit != null &&
+                           card.LocalUnit.WorkshopId == "999") == 1,
+                    "an unindexed Workshop link should remain once in the local installed section");
+                Rectangle footerBoundsBeforeScroll = submissionFooter.Bounds;
+                var listWheel = typeof(WheelFlowLayoutPanel).GetMethod("OnMouseWheel",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                listWheel.Invoke(flow, new object[]
+                {
+                    new MouseEventArgs(MouseButtons.None, 0, 10, 10, -120),
+                });
+                Assert(submissionFooter.Bounds == footerBoundsBeforeScroll &&
+                       flow.Bottom + 4 == submissionFooter.Top,
+                    "wheel input on the Mod list must not move or overlap the fixed footer; " +
+                    "flowBottom=" + flow.Bottom +
+                    ", footerTop=" + submissionFooter.Top +
+                    ", footerMoved=" + (submissionFooter.Bounds != footerBoundsBeforeScroll));
+                string[] sectionTexts = flow.Controls.OfType<Label>()
+                    .Select(label => label.Text).ToArray();
+                Assert(sectionTexts.Contains("Steam 创意工坊目录") &&
+                       sectionTexts.Contains("本地已安装插件"),
+                    "merged rendering should retain clear Workshop and local section headings");
+
+                List<Control> oldRenderedControls = flow.Controls.Cast<Control>().ToList();
+                InvokePrivate(form, "RenderList");
+                Assert(oldRenderedControls.All(control => control.IsDisposed),
+                    "re-rendering should dispose removed cards and labels instead of leaking handles");
+            }
+        }
+
+        private static void RunWheelFlowLayoutPanelTests()
+        {
+            using (var panel = new WheelFlowLayoutPanel
+            {
+                Size = new Size(220, 100),
+                AutoScroll = true,
+                AutoScrollMinSize = new Size(0, 600),
+            })
+            {
+                panel.CreateControl();
+                panel.PerformLayout();
+                Assert(panel.TabStop && panel.DisplayRectangle.Height > panel.ClientSize.Height,
+                    "wheel panel test setup should have a scrollable vertical range");
+
+                var onMouseWheel = typeof(WheelFlowLayoutPanel).GetMethod("OnMouseWheel",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert(onMouseWheel != null, "wheel-aware panel should override OnMouseWheel");
+                int before = -panel.AutoScrollPosition.Y;
+                onMouseWheel.Invoke(panel, new object[]
+                {
+                    new MouseEventArgs(MouseButtons.None, 0, 10, 10, -120),
+                });
+                int afterDown = -panel.AutoScrollPosition.Y;
+                Assert(afterDown - before >= 24,
+                    "one wheel notch should move by a usable pixel distance, not only a few pixels");
+                onMouseWheel.Invoke(panel, new object[]
+                {
+                    new MouseEventArgs(MouseButtons.None, 0, 10, 10, 120),
+                });
+                Assert(-panel.AutoScrollPosition.Y < afterDown,
+                    "mouse-wheel up should move the Mod list upward");
+
+                for (int i = 0; i < 20; i++)
+                    onMouseWheel.Invoke(panel, new object[]
+                    {
+                        new MouseEventArgs(MouseButtons.None, 0, 10, 10, -120),
+                    });
+                int maxOffset = Math.Max(0,
+                    panel.DisplayRectangle.Height - panel.ClientSize.Height);
+                Assert(-panel.AutoScrollPosition.Y == maxOffset,
+                    "repeated wheel-down input should clamp exactly at the bottom");
+                for (int i = 0; i < 20; i++)
+                    onMouseWheel.Invoke(panel, new object[]
+                    {
+                        new MouseEventArgs(MouseButtons.None, 0, 10, 10, 120),
+                    });
+                Assert(-panel.AutoScrollPosition.Y == 0,
+                    "repeated wheel-up input should clamp exactly at the top");
+            }
+
+            using (var shortPanel = new WheelFlowLayoutPanel
+            {
+                Size = new Size(220, 100),
+                AutoScroll = true,
+            })
+            {
+                shortPanel.CreateControl();
+                var onMouseWheel = typeof(WheelFlowLayoutPanel).GetMethod("OnMouseWheel",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                onMouseWheel.Invoke(shortPanel, new object[]
+                {
+                    new MouseEventArgs(MouseButtons.None, 0, 10, 10, -120),
+                });
+                Assert(shortPanel.AutoScrollPosition.Y == 0,
+                    "wheel input should be harmless when the list does not overflow");
             }
         }
 
         private static void RunModCardUiTests()
         {
-            var legacyEntry = new ModEntry
-            {
-                id = "legacy-test",
-                name = "Legacy Test",
-                description = "Legacy direct-install entry",
-                repo = "owner/repository",
-                version = "v2.0.0",
-                installDir = "BepInEx/plugins/LegacyTest",
-            };
-
-            using (var card = new ModCard())
-            {
-                var title = GetCardLabel(card, "_title");
-                var description = GetCardLabel(card, "_desc");
-                var main = GetButton(card, "_btnMain");
-                var toggle = GetButton(card, "_btnToggle");
-                var uninstall = GetButton(card, "_btnUninstall");
-                var home = GetButton(card, "_btnHome");
-
-                card.Bind(legacyEntry, ModStatus.UpdateAvailable, "v1.0.0");
-                Assert(main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
-                    "legacy update actions should initially be enabled");
-                Assert(main.Visible && toggle.Visible && uninstall.Visible && home.Visible,
-                    "legacy update entry should expose update, toggle, uninstall, and home actions");
-
-                card.SetBusy(true);
-                Assert(!main.Enabled && !toggle.Enabled && !uninstall.Enabled && !home.Enabled,
-                    "busy state should disable every legacy card action");
-                card.SetBusy(false);
-                Assert(main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
-                    "leaving busy state should restore legacy update actions");
-
-                card.Bind(legacyEntry, ModStatus.UpToDate, "v2.0.0");
-                card.SetBusy(true);
-                card.SetBusy(false);
-                Assert(!main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
-                    "up-to-date main action must remain disabled after busy state");
-
-                card.Bind(legacyEntry, ModStatus.Disabled, "v2.0.0");
-                card.SetBusy(true);
-                card.SetBusy(false);
-                Assert(!main.Enabled && toggle.Enabled && uninstall.Enabled && home.Enabled,
-                    "disabled entry must require re-enable before updating after busy state");
-                Assert(toggle.Text == "启用", "disabled entry should restore its enable action");
-
-                legacyEntry.name = null;
-                legacyEntry.description = null;
-                card.Bind(legacyEntry, ModStatus.NotInstalled, null);
-                Assert(title.Text == legacyEntry.id && description.Text == string.Empty,
-                    "legacy entries should use the internal ID for a missing title but keep an empty description");
-            }
-
             var workshopEntry = new ModEntry
             {
                 id = "workshop-ui-test",
                 name = "Workshop Test",
                 description = "Steam-managed entry",
-                repo = "owner/repository",
                 version = "v1.0.0",
-                installDir = "BepInEx/plugins/WorkshopTest",
                 workshopId = "1234",
             };
 
@@ -1310,75 +1432,446 @@ namespace StudentAgeModManager.Tests
             {
                 var title = GetCardLabel(card, "_title");
                 var description = GetCardLabel(card, "_desc");
+                var source = GetCardLabel(card, "_status");
+                var registration = GetCardLabel(card, "_statusRegistration");
+                var state = GetCardLabel(card, "_statusState");
+                var statusPanel = GetCardPanel(card, "_statusPanel");
                 var main = GetButton(card, "_btnMain");
                 var toggle = GetButton(card, "_btnToggle");
-                var uninstall = GetButton(card, "_btnUninstall");
-                var home = GetButton(card, "_btnHome");
 
                 string[] missingValues = { null, string.Empty, "   " };
                 foreach (string missing in missingValues)
                 {
                     workshopEntry.name = missing;
                     workshopEntry.description = missing;
-                    card.Bind(workshopEntry, ModStatus.NotInstalled, null);
+                    card.Bind(workshopEntry);
                     Assert(title.Text == workshopEntry.id,
-                        "null, empty, and whitespace Workshop names should display the internal ID");
+                        "missing Workshop names should display the internal ID");
                     Assert(description.Text == WorkshopMetadataService.DefaultDescription,
-                        "null, empty, and whitespace Workshop descriptions should display the safe default");
+                        "missing Workshop descriptions should display the safe default");
                 }
-
-                workshopEntry.name = "Steam metadata title";
-                workshopEntry.description = "Steam metadata description";
-                card.Bind(workshopEntry, ModStatus.NotInstalled, null);
-                Assert(title.Text == "Steam metadata title" &&
-                       description.Text == "Steam metadata description",
-                    "enriched Steam display metadata should be rendered normally");
 
                 workshopEntry.name = "Workshop Test";
                 workshopEntry.description = "Steam-managed entry";
-                card.Bind(workshopEntry, ModStatus.NotInstalled, null);
-                Assert(main.Visible && main.Enabled && main.Text == "订阅 / 查看工坊",
-                    "normal workshop entry should expose only the Steam action");
-                Assert(!toggle.Visible && !uninstall.Visible && !home.Visible,
-                    "normal workshop entry must hide legacy management actions");
+                card.Bind(workshopEntry);
+                Assert(card.StatusText == "Steam 工坊 · 已收录 · 未接入",
+                    "an indexed Workshop item without a Bridge link should use concise status text");
+                Assert(IsPositive(registration.ForeColor) && IsNegative(state.ForeColor),
+                    "已收录 should be green while 未接入 should be red");
+                Assert(source.Left >= 0 && source.Right <= registration.Left &&
+                       registration.Right <= state.Left &&
+                       state.Right <= statusPanel.ClientSize.Width,
+                    "status segments should remain right-aligned without overlap or overflow");
+                Assert(main.Visible && main.Enabled && main.Text == "打开工坊页面",
+                    "Workshop buttons must accurately state that they only open the page");
+                string requestedWorkshopId = null;
+                card.WorkshopPageClicked += id => requestedWorkshopId = id;
+                RaiseButtonClick(main);
+                Assert(requestedWorkshopId == "1234",
+                    "the page button should emit the normalized Workshop ID without subscribing directly");
+                Assert(!toggle.Visible,
+                    "Workshop index cards must not expose local file toggles");
 
                 card.SetBusy(true);
-                Assert(!main.Enabled, "busy state should disable the Steam action");
+                Assert(!main.Enabled, "busy state should disable the Workshop page action");
                 card.SetBusy(false);
-                Assert(main.Enabled && !toggle.Visible && !uninstall.Visible && !home.Visible,
-                    "workshop card should restore only its Steam action after busy state");
+                Assert(main.Enabled && !toggle.Visible,
+                    "leaving busy should restore only the Workshop page action");
 
-                card.Bind(workshopEntry, ModStatus.InstalledUnknown, null);
-                Assert(main.Visible && main.Enabled && uninstall.Visible && uninstall.Enabled,
-                    "workshop entry with a legacy install should expose Steam and cleanup actions");
-                Assert(uninstall.Text == "清理旧安装",
-                    "workshop legacy cleanup action should use explicit wording");
-                Assert(!toggle.Visible && !home.Visible,
-                    "workshop cleanup state must still hide toggle and home actions");
-
-                card.SetBusy(true);
-                card.SetBusy(false);
-                Assert(main.Enabled && uninstall.Enabled && !toggle.Visible && !home.Visible,
-                    "workshop cleanup actions should restore without revealing legacy-only actions");
+                var installedWorkshop = new LocalPluginUnit
+                {
+                    UnitKey = ".workshop/1234",
+                    DisplayName = "Installed Workshop Test",
+                    DisplayVersion = "2.0.0",
+                    RelativePath = "BepInEx\\plugins\\.workshop\\1234",
+                    EnabledRelativePath = "BepInEx\\plugins\\.workshop\\1234",
+                    IsDirectory = true,
+                    Source = LocalPluginSource.SteamWorkshop,
+                    WorkshopId = "1234",
+                    DllCount = 1,
+                    Plugins = new List<ScannedPlugin>
+                    {
+                        new ScannedPlugin { Name = "Installed Workshop Test", Version = "2.0.0" },
+                    },
+                };
+                card.Bind(workshopEntry, installedWorkshop);
+                Assert(card.StatusText == "Steam 工坊 · 已收录 · 已接入",
+                    "an indexed and connected Workshop item should be represented by one merged card");
+                Assert(IsPositive(registration.ForeColor) && IsPositive(state.ForeColor),
+                    "已收录 and 已接入 should both be green");
+                Assert(description.Text.Contains("2.0.0") &&
+                       description.Text.Contains("ID 1234") &&
+                       description.Text.Contains(".workshop\\1234"),
+                    "merged Workshop cards should include the scanned version, ID, and link path");
+                Assert(main.Text == "打开工坊页面" && !toggle.Visible,
+                    "merged Workshop cards should expose only the page action");
 
                 workshopEntry.workshopId = "   ";
-                card.Bind(workshopEntry, ModStatus.NotInstalled, null);
+                card.Bind(workshopEntry);
                 card.SetBusy(true);
                 card.SetBusy(false);
-                Assert(main.Visible && !main.Enabled && main.Text == "工坊信息无效",
-                    "invalid declared workshop reference must remain visibly blocked after busy state");
-                Assert(!toggle.Visible && !toggle.Enabled &&
-                       !uninstall.Visible && !uninstall.Enabled &&
-                       !home.Visible && !home.Enabled,
-                    "invalid workshop entry must not expose any legacy fallback action");
+                Assert(card.StatusText == "Steam 工坊 · 信息无效" &&
+                       main.Visible && !main.Enabled && main.Text == "工坊信息无效",
+                    "invalid Workshop references must remain visibly blocked");
+            }
+
+            var localUnit = new LocalPluginUnit
+            {
+                UnitKey = "LocalExample",
+                DisplayName = "Local Example",
+                DisplayVersion = "1.2.3",
+                RelativePath = "BepInEx\\plugins\\LocalExample",
+                EnabledRelativePath = "BepInEx\\plugins\\LocalExample",
+                IsDirectory = true,
+                Source = LocalPluginSource.Local,
+                DllCount = 2,
+                Plugins = new List<ScannedPlugin>
+                {
+                    new ScannedPlugin
+                    {
+                        Guid = "example.local",
+                        Name = "Local Example",
+                        Version = "1.2.3",
+                        DllFileName = "LocalExample.dll",
+                    },
+                },
+            };
+
+            using (var card = new ModCard())
+            {
+                var description = GetCardLabel(card, "_desc");
+                var registration = GetCardLabel(card, "_statusRegistration");
+                var state = GetCardLabel(card, "_statusState");
+                var main = GetButton(card, "_btnMain");
+                var toggle = GetButton(card, "_btnToggle");
+
+                card.BindLocal(localUnit);
+                Assert(card.StatusText == "本地 · 未收录 · 已启用",
+                    "enabled local plugins should use concise source and state text");
+                Assert(IsNegative(registration.ForeColor) && IsPositive(state.ForeColor),
+                    "未收录 should be red while 已启用 should be green");
+                Assert(description.Text.Contains("1.2.3") &&
+                       description.Text.Contains("BepInEx\\plugins\\LocalExample"),
+                    "local cards should display version and path");
+                Assert(!main.Visible && toggle.Visible && toggle.Enabled && toggle.Text == "禁用",
+                    "enabled local plugins should expose only the disable action");
+                Assert(typeof(ModCard).GetField("_btnUninstall",
+                           BindingFlags.Instance | BindingFlags.NonPublic) == null,
+                    "local unlisted plugins must not retain a delete action");
+
+                card.SetBusy(true);
+                Assert(!toggle.Enabled, "busy state should disable local toggles");
+                card.SetBusy(false);
+                Assert(toggle.Enabled && toggle.Text == "禁用",
+                    "leaving busy should restore the local toggle");
+
+                localUnit.IsDisabled = true;
+                localUnit.RelativePath = "BepInEx\\ModManager\\disabled\\LocalExample";
+                card.BindLocal(localUnit);
+                Assert(card.StatusText == "本地 · 未收录 · 未启用" && toggle.Text == "启用",
+                    "disabled local plugins should use the red 未启用 state");
+                Assert(IsNegative(registration.ForeColor) && IsNegative(state.ForeColor),
+                    "both 未收录 and 未启用 should be red");
+
+                localUnit.HasPathConflict = true;
+                card.BindLocal(localUnit);
+                Assert(card.StatusText == "本地 · 未收录 · 路径冲突" && !toggle.Visible,
+                    "conflicting copies should be displayed without a destructive toggle");
+            }
+
+            var unindexedWorkshop = new LocalPluginUnit
+            {
+                UnitKey = ".workshop/987654",
+                DisplayName = "Unindexed Workshop Plugin",
+                DisplayVersion = "2.0.0",
+                RelativePath = "BepInEx\\plugins\\.workshop\\987654",
+                EnabledRelativePath = "BepInEx\\plugins\\.workshop\\987654",
+                IsDirectory = true,
+                Source = LocalPluginSource.SteamWorkshop,
+                WorkshopId = "987654",
+                DllCount = 1,
+                Plugins = new List<ScannedPlugin>
+                {
+                    new ScannedPlugin { Name = "Unindexed Workshop Plugin", Version = "2.0.0" },
+                },
+            };
+            using (var card = new ModCard())
+            {
+                card.BindLocal(unindexedWorkshop);
+                var registration = GetCardLabel(card, "_statusRegistration");
+                var state = GetCardLabel(card, "_statusState");
+                var main = GetButton(card, "_btnMain");
+                var toggle = GetButton(card, "_btnToggle");
+                Assert(card.StatusText == "Steam 工坊 · 未收录 · 已接入",
+                    "unindexed connected Workshop plugins should use the requested concise status");
+                Assert(IsNegative(registration.ForeColor) && IsPositive(state.ForeColor),
+                    "未收录 should be red while 已接入 should be green");
+                Assert(main.Visible && main.Enabled && main.Text == "打开工坊页面" &&
+                       !toggle.Visible,
+                    "unindexed Workshop links should only expose an accurately named page action");
             }
         }
+
+        private static bool IsPositive(Color color)
+        {
+            return color.ToArgb() == Color.FromArgb(45, 135, 70).ToArgb();
+        }
+
+        private static bool IsNegative(Color color)
+        {
+            return color.ToArgb() == Color.Firebrick.ToArgb();
+        }
+
+
+        private static void RunLocalPluginScannerTests(string root)
+        {
+            string gameRoot = Path.Combine(root, "StudentAge");
+            string pluginsRoot = Path.Combine(gameRoot, "BepInEx", "plugins");
+            Directory.CreateDirectory(pluginsRoot);
+
+            var scanner = new LocalPluginScanner();
+            Assert(scanner.Scan(gameRoot).Count == 0,
+                "an empty plugins directory should produce no local plugin cards");
+
+            string directoryUnit = Path.Combine(pluginsRoot, "DirectoryMod");
+            Directory.CreateDirectory(directoryUnit);
+            WritePluginAssembly(Path.Combine(directoryUnit, "DirectoryMod.dll"),
+                "tests.directory", "Directory Mod", "1.0.0");
+            File.WriteAllBytes(Path.Combine(directoryUnit, "NativeDependency.dll"),
+                new byte[] { 0x4d, 0x5a, 0, 0 });
+
+            string rootDll = Path.Combine(pluginsRoot, "RootMod.dll");
+            WritePluginAssembly(rootDll, "tests.root", "Root Mod", "2.0.0");
+
+            List<LocalPluginUnit> units = scanner.Scan(gameRoot);
+            LocalPluginUnit directory = units.FirstOrDefault(unit =>
+                unit.UnitKey == "DirectoryMod");
+            LocalPluginUnit rootPlugin = units.FirstOrDefault(unit =>
+                unit.UnitKey == "RootMod.dll");
+            Assert(directory != null && directory.Source == LocalPluginSource.Local &&
+                   directory.DisplayName == "Directory Mod" &&
+                   directory.DisplayVersion == "1.0.0" && directory.DllCount == 2 &&
+                   directory.Plugins.Count == 1,
+                "directory plugins should be grouped with dependencies and read BepInPlugin metadata");
+            Assert(rootPlugin != null && !rootPlugin.IsDirectory &&
+                   rootPlugin.DisplayName == "Root Mod" && rootPlugin.DisplayVersion == "2.0.0",
+                "a root-level plugin DLL should be represented as an independent local unit");
+
+            var manager = new LocalPluginManager(new LocalState(gameRoot));
+            manager.Disable(directory);
+            Assert(!Directory.Exists(directoryUnit) &&
+                   Directory.Exists(Path.Combine(gameRoot, "BepInEx", "ModManager",
+                       "disabled", "DirectoryMod")),
+                "disabling should move the complete local directory without deleting it");
+
+            LocalPluginUnit disabled = scanner.Scan(gameRoot).FirstOrDefault(unit =>
+                unit.UnitKey == "DirectoryMod" && unit.IsDisabled);
+            Assert(disabled != null && disabled.Source == LocalPluginSource.Local,
+                "disabled and former direct-install directories should be unified as local unlisted plugins");
+            manager.Enable(disabled);
+            Assert(Directory.Exists(directoryUnit),
+                "enabling should restore a disabled local unit to BepInEx/plugins");
+
+            string disabledRoot = Path.Combine(gameRoot, "BepInEx", "ModManager", "disabled");
+            Directory.CreateDirectory(disabledRoot);
+            string rootConflict = Path.Combine(disabledRoot, "RootMod.dll");
+            File.Copy(rootDll, rootConflict);
+            List<LocalPluginUnit> conflictingUnits = scanner.Scan(gameRoot)
+                .Where(unit => unit.UnitKey == "RootMod.dll").ToList();
+            Assert(conflictingUnits.Count == 2 &&
+                   conflictingUnits.All(unit => unit.HasPathConflict),
+                "enabled and disabled same-name plugins should be visibly marked as a path conflict");
+            long rootLength = new FileInfo(rootDll).Length;
+            AssertThrows<IOException>(() => manager.Disable(rootPlugin),
+                "disabling must refuse to overwrite an existing disabled file");
+            Assert(File.Exists(rootDll) && new FileInfo(rootConflict).Length == rootLength,
+                "an enable/disable collision must leave both source and target untouched");
+            File.Delete(rootConflict);
+
+            manager.Disable(rootPlugin);
+            Assert(!File.Exists(rootDll) && File.Exists(rootConflict),
+                "root-level DLL units should use the file move branch when disabled");
+            LocalPluginUnit disabledRootPlugin = scanner.Scan(gameRoot).FirstOrDefault(unit =>
+                unit.UnitKey == "RootMod.dll" && unit.IsDisabled);
+            Assert(disabledRootPlugin != null && !disabledRootPlugin.IsDirectory,
+                "disabled root-level DLLs should remain discoverable");
+            manager.Enable(disabledRootPlugin);
+            Assert(File.Exists(rootDll) && !File.Exists(rootConflict),
+                "root-level DLL units should be restored without copying or deleting data");
+
+            string fakeGameExe = Path.Combine(root, "StudentAge.exe");
+            File.Copy(Path.Combine(Environment.SystemDirectory, "PING.EXE"), fakeGameExe, true);
+            Process fakeGame = Process.Start(new ProcessStartInfo
+            {
+                FileName = fakeGameExe,
+                Arguments = "-t 127.0.0.1",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            });
+            try
+            {
+                var wait = Stopwatch.StartNew();
+                while (!ModInstaller.IsGameRunning() && wait.Elapsed < TimeSpan.FromSeconds(3))
+                    Thread.Sleep(25);
+                Assert(ModInstaller.IsGameRunning(),
+                    "test setup should expose a process named StudentAge");
+                AssertThrows<InvalidOperationException>(() => manager.Disable(rootPlugin),
+                    "local plugin moves must be rejected while the game is running");
+                Assert(File.Exists(rootDll),
+                    "game-running rejection must leave the plugin in place");
+            }
+            finally
+            {
+                if (fakeGame != null && !fakeGame.HasExited)
+                {
+                    fakeGame.Kill();
+                    fakeGame.WaitForExit();
+                }
+                if (fakeGame != null) fakeGame.Dispose();
+            }
+
+            string workshopTarget = Path.Combine(root, "workshop-content", "987654",
+                "BepInEx", "plugins");
+            string workshopPluginDir = Path.Combine(workshopTarget, "WorkshopMod");
+            Directory.CreateDirectory(workshopPluginDir);
+            WritePluginAssembly(Path.Combine(workshopPluginDir, "WorkshopMod.dll"),
+                "tests.workshop", "Workshop Mod", "3.0.0");
+            string workshopRoot = Path.Combine(pluginsRoot, ".workshop");
+            Directory.CreateDirectory(workshopRoot);
+            string workshopLink = Path.Combine(workshopRoot, "987654");
+            Assert(CreateJunction(workshopLink, workshopTarget),
+                "test setup should be able to create a Workshop-style directory junction");
+
+            units = scanner.Scan(gameRoot);
+            LocalPluginUnit workshop = units.FirstOrDefault(unit =>
+                unit.Source == LocalPluginSource.SteamWorkshop && unit.WorkshopId == "987654");
+            Assert(workshop != null && workshop.DisplayName == "Workshop Mod" &&
+                   workshop.DisplayVersion == "3.0.0" && !workshop.IsDisabled,
+                "Bridge junction plugins should be identified as installed Steam Workshop content");
+            AssertThrows<InvalidOperationException>(() => manager.Disable(workshop),
+                "the local manager must never move Workshop Bridge junctions");
+            Assert(units.TakeWhile(unit => unit.Source == LocalPluginSource.Local).Count() == 2 &&
+                   units.Last().Source == LocalPluginSource.SteamWorkshop,
+                "scan results should sort local units before Workshop units");
+
+            string ordinaryWorkshopDir = Path.Combine(workshopRoot, "123456");
+            Directory.CreateDirectory(ordinaryWorkshopDir);
+            WritePluginAssembly(Path.Combine(ordinaryWorkshopDir, "Ordinary.dll"),
+                "tests.ordinary", "Ordinary Workshop Directory", "1.0.0");
+            string nonCanonicalLink = Path.Combine(workshopRoot, "000123");
+            Assert(CreateJunction(nonCanonicalLink, workshopTarget),
+                "test setup should create a non-canonical Workshop junction");
+            units = scanner.Scan(gameRoot);
+            Assert(!units.Any(unit => unit.WorkshopId == "123456" ||
+                                      unit.WorkshopId == "000123"),
+                "ordinary Workshop directories and non-canonical IDs must be ignored");
+
+            string hugeDll = Path.Combine(pluginsRoot, "Huge.dll");
+            using (var huge = new FileStream(hugeDll, FileMode.Create, FileAccess.Write,
+                FileShare.None))
+                huge.SetLength(128L * 1024L * 1024L + 1L);
+            Assert(!scanner.Scan(gameRoot).Any(unit => unit.UnitKey == "Huge.dll"),
+                "DLLs above the metadata size limit must be skipped without loading");
+
+            string unsafeGame = Path.Combine(root, "unsafe-workshop-root");
+            string unsafePlugins = Path.Combine(unsafeGame, "BepInEx", "plugins");
+            string unsafeTarget = Path.Combine(root, "unsafe-workshop-target");
+            Directory.CreateDirectory(unsafePlugins);
+            Directory.CreateDirectory(Path.Combine(unsafeTarget, "555"));
+            WritePluginAssembly(Path.Combine(unsafeTarget, "555", "Unsafe.dll"),
+                "tests.unsafe", "Unsafe Workshop Root", "1.0.0");
+            Assert(CreateJunction(Path.Combine(unsafePlugins, ".workshop"), unsafeTarget),
+                "test setup should create a reparse-point Workshop root");
+            Assert(!scanner.Scan(unsafeGame).Any(unit =>
+                    unit.Source == LocalPluginSource.SteamWorkshop),
+                "a reparse-point .workshop root must be rejected as a whole");
+
+            string suspiciousTarget = Path.Combine(root, "suspicious-target");
+            Directory.CreateDirectory(suspiciousTarget);
+            WritePluginAssembly(Path.Combine(suspiciousTarget, "Suspicious.dll"),
+                "tests.suspicious", "Suspicious", "1.0.0");
+            string suspiciousLink = Path.Combine(pluginsRoot, "SuspiciousLink");
+            Assert(CreateJunction(suspiciousLink, suspiciousTarget),
+                "test setup should create an arbitrary reparse point");
+            Assert(!scanner.Scan(gameRoot).Any(unit => unit.UnitKey == "SuspiciousLink"),
+                "non-Workshop reparse points must not be followed or displayed");
+        }
+
+        private static void WritePluginAssembly(string path, string guid, string name,
+            string version)
+        {
+            string directory = Path.GetDirectoryName(path);
+            string fileName = Path.GetFileName(path);
+            Directory.CreateDirectory(directory);
+            string assemblyName = Path.GetFileNameWithoutExtension(fileName) + "." +
+                                  Guid.NewGuid().ToString("N");
+            var builder = AppDomain.CurrentDomain.DefineDynamicAssembly(
+                new AssemblyName(assemblyName),
+                System.Reflection.Emit.AssemblyBuilderAccess.Save, directory);
+            var module = builder.DefineDynamicModule(assemblyName, fileName);
+
+            var attributeBuilder = module.DefineType("BepInEx.BepInPlugin",
+                TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Sealed,
+                typeof(Attribute));
+            var constructorBuilder = attributeBuilder.DefineConstructor(
+                MethodAttributes.Public, CallingConventions.Standard,
+                new[] { typeof(string), typeof(string), typeof(string) });
+            var il = constructorBuilder.GetILGenerator();
+            var attributeBaseConstructor = typeof(Attribute).GetConstructor(
+                BindingFlags.Instance | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
+            il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+            il.Emit(System.Reflection.Emit.OpCodes.Call, attributeBaseConstructor);
+            il.Emit(System.Reflection.Emit.OpCodes.Ret);
+            Type attributeType = attributeBuilder.CreateType();
+
+            var pluginBuilder = module.DefineType("Fixture.Plugin",
+                TypeAttributes.Public | TypeAttributes.Class, typeof(object));
+            var attribute = new System.Reflection.Emit.CustomAttributeBuilder(
+                attributeType.GetConstructor(new[]
+                    { typeof(string), typeof(string), typeof(string) }),
+                new object[] { guid, name, version });
+            pluginBuilder.SetCustomAttribute(attribute);
+            pluginBuilder.CreateType();
+            builder.Save(fileName);
+        }
+
+        private static bool CreateJunction(string link, string target)
+        {
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = "/d /c mklink /J \"" + link + "\" \"" + target + "\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using (Process process = Process.Start(startInfo))
+            {
+                process.WaitForExit();
+                return process.ExitCode == 0 && Directory.Exists(link) &&
+                       (File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0;
+            }
+        }
+
 
         private static void AssertTextFits(Label label, string message)
         {
             var measured = TextRenderer.MeasureText(label.Text, label.Font,
                 new Size(label.ClientSize.Width, int.MaxValue),
                 TextFormatFlags.TextBoxControl | TextFormatFlags.WordBreak);
+            Assert(measured.Width <= label.ClientSize.Width &&
+                   measured.Height <= label.ClientSize.Height,
+                message + "; measured=" + measured.Width + "x" + measured.Height +
+                ", available=" + label.ClientSize.Width + "x" + label.ClientSize.Height);
+        }
+
+        private static void AssertSingleLineFits(Label label, string message)
+        {
+            var measured = TextRenderer.MeasureText(label.Text, label.Font, Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
             Assert(measured.Width <= label.ClientSize.Width &&
                    measured.Height <= label.ClientSize.Height,
                 message + "; measured=" + measured.Width + "x" + measured.Height +
@@ -1421,6 +1914,14 @@ namespace StudentAgeModManager.Tests
             return button;
         }
 
+        private static void RaiseButtonClick(Button button)
+        {
+            var method = typeof(Button).GetMethod("OnClick",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert(method != null, "Button.OnClick should be available for UI tests");
+            method.Invoke(button, new object[] { EventArgs.Empty });
+        }
+
         private static Label GetCardLabel(ModCard card, string fieldName)
         {
             var field = typeof(ModCard).GetField(fieldName,
@@ -1429,6 +1930,16 @@ namespace StudentAgeModManager.Tests
             var label = field.GetValue(card) as Label;
             Assert(label != null, "ModCard field is not a label: " + fieldName);
             return label;
+        }
+
+        private static Panel GetCardPanel(ModCard card, string fieldName)
+        {
+            var field = typeof(ModCard).GetField(fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert(field != null, "missing ModCard field: " + fieldName);
+            var panel = field.GetValue(card) as Panel;
+            Assert(panel != null, "ModCard field is not a panel: " + fieldName);
+            return panel;
         }
 
         private static ModIndex CreateWorkshopIndex(params ModEntry[] entries)

@@ -1,101 +1,401 @@
-# 向中央 Mod 索引投稿
+# 把你的 DLL Mod 加入管理器推荐目录
 
-感谢为《学生时代》Mod 生态做贡献。中央索引位于 [`mods.json`](mods.json)。DLL Mod 作者可以通过 Pull Request 添加或更新自己的条目；管理器仍会在运行时重新验证整份索引，因此 CI 不是唯一安全边界。
+欢迎为《学生时代》制作 Mod！本指南会带你把 DLL Mod 加入 Mod Manager 的推荐目录。
 
-## 投稿前准备
+先说明一件重要的事：**中央索引不是加载白名单。**只要你的工坊包符合 Workshop Bridge 格式，玩家即使直接从 Steam 订阅、没有在 Git 中收录，也可以正常接入和运行。
 
-请先确认：
+“收录”主要带来这些效果：
 
-- 工坊项目确实属于 Steam AppID `1991040`；
-- 工坊项目已公开，并可由 Steam 官方公开 API 读取标题和项目详情；
-- 工坊包符合 [`DEVELOPMENT.md`](DEVELOPMENT.md#工坊-dll-包格式) 中的 DLL Bridge 包格式；
-- 有可供审查的源码仓库，并明确作者身份与许可证/分发授权；
-- 已在干净的游戏环境中测试订阅、Steam 下载、下一次启动加载、更新和取消订阅。
+- Mod 会出现在管理器顶部的“Steam 创意工坊目录”；
+- 玩家可以从管理器打开你的工坊页面；
+- 你可以在索引中自定义管理器显示的名称和简介；
+- 已收录并已接入时，目录信息和本地安装状态会合并成一张卡片。
 
-## `workshopId` 允许的格式
+## 最短投稿流程
 
-`workshopId` 是 JSON **字符串**。请只提交以下三种形式之一：
+你只需要完成 5 步：
+
+1. 把符合格式的 DLL Mod 发布到《学生时代》Steam 创意工坊；
+2. 取得真实的 Workshop ID；
+3. Fork（复制）本仓库，并在 `mods.json` 中添加一条记录；
+4. 向本仓库的 **`test` 分支**提交 Pull Request（简称 PR，也就是合并申请）；
+5. 等待自动检查和维护者审核。
+
+下面会逐步说明。
+
+---
+
+## 第 1 步：准备工坊 DLL 包
+
+工坊项目中至少需要以下结构：
 
 ```text
-<WORKSHOP_ID>
+<WorkshopItem>/
+├─ workshop-plugin.json
+└─ BepInEx/
+   └─ plugins/
+      └─ <你的插件目录>/
+         ├─ <你的插件>.dll
+         └─ 其他依赖.dll（如果需要）
+```
+
+`workshop-plugin.json` 内容固定为：
+
+```json
+{
+  "schemaVersion": 1,
+  "type": "bepinex-plugin",
+  "pluginRoot": "BepInEx/plugins"
+}
+```
+
+请确认：
+
+- 至少有一个带 `BepInPlugin` 声明的 DLL；
+- 工坊项目属于《学生时代》，Steam AppID 为 `1991040`；
+- 工坊项目已经公开，其他玩家可以打开和订阅；
+- 订阅、下载并启动游戏后，Workshop Bridge 可以正常接入；
+- 有可供审核的源码仓库，并说明作者和许可证/分发授权。
+
+更详细的包格式和 Bridge 原理见 [DEVELOPMENT.md](DEVELOPMENT.md#工坊-dll-包格式)。
+
+---
+
+## 第 2 步：找到 Workshop ID
+
+打开你的 Steam 工坊页面，例如：
+
+```text
+https://steamcommunity.com/sharedfiles/filedetails/?id=1234567890
+```
+
+其中：
+
+```text
+1234567890
+```
+
+就是 Workshop ID。
+
+在 `mods.json` 中推荐直接填写纯数字字符串：
+
+```json
+"workshopId": "1234567890"
+```
+
+注意外面的双引号不能省略。以下写法是错误的：
+
+```json
+"workshopId": 1234567890
+```
+
+---
+
+## 第 3 步：修改 `mods.json`
+
+中央推荐目录文件位于仓库根目录：
+
+```text
+mods.json
+```
+
+### 最小模板
+
+只填写内部 ID 和 Workshop ID 即可：
+
+```json
+{
+  "id": "author-my-mod",
+  "workshopId": "1234567890"
+}
+```
+
+如果没有填写名称和简介，管理器会从 Steam 工坊读取。
+
+### 推荐模板
+
+如果希望自己控制管理器中的显示文字，可以添加 `name` 和 `description`：
+
+```json
+{
+  "id": "author-my-mod",
+  "name": "我的 Mod",
+  "description": "一句话说明这个 Mod 的主要功能",
+  "workshopId": "1234567890"
+}
+```
+
+字段说明：
+
+| 字段 | 是否必填 | 用途 |
+|---|---:|---|
+| `id` | 是 | 管理器内部使用的稳定唯一 ID，建议使用“作者-项目名” |
+| `workshopId` | 是 | Steam Workshop ID，必须写成字符串 |
+| `name` | 否 | 管理器中的显示名称；不填则读取 Steam 标题 |
+| `description` | 否 | 管理器中的简短介绍；不填则读取 Steam 说明 |
+
+`id` 发布后尽量不要修改。它不是下载地址，也不要求和 DLL 文件名完全相同。
+
+### 放入 `mods` 数组
+
+假设原来是：
+
+```json
+"mods": []
+```
+
+可以改成：
+
+```json
+"mods": [
+  {
+    "id": "author-my-mod",
+    "name": "我的 Mod",
+    "description": "一句话说明这个 Mod 的主要功能",
+    "workshopId": "1234567890"
+  }
+]
+```
+
+如果数组中已经有其他 Mod，记得在相邻对象之间添加英文逗号：
+
+```json
+"mods": [
+  {
+    "id": "existing-mod",
+    "workshopId": "1111111111"
+  },
+  {
+    "id": "author-my-mod",
+    "workshopId": "1234567890"
+  }
+]
+```
+
+同时把根对象中的 `updatedAt` 更新为当天日期：
+
+```json
+"updatedAt": "2026-07-13"
+```
+
+日期格式为：
+
+```text
+YYYY-MM-DD
+```
+
+### 不要再填写旧版直装字段
+
+管理器已经不支持 DLL/ZIP 直装索引，请不要添加：
+
+```json
+"downloadUrl"
+"assetType"
+"installDir"
+```
+
+DLL 文件由 Steam Workshop 分发和更新。
+
+---
+
+## 第 4 步：通过 GitHub 提交
+
+不熟悉 Git 命令也没关系，可以直接使用 GitHub 网页完成：
+
+1. 打开本仓库并点击右上角 **Fork**；
+2. 在自己的 Fork 中创建一个新分支；
+3. 打开 `mods.json`，点击铅笔图标编辑；
+4. 添加你的条目并提交修改；
+5. 点击 **Contribute → Open pull request**；
+6. 创建 PR 时，把目标分支（base branch）选择为 **`test`**。
+
+当前测试版管理器读取的是：
+
+```text
+StudentAgeModManager/test/mods.json
+```
+
+因此 PR 如果误提交到 `main`，测试版暂时看不到该条目。
+
+### PR 描述建议包含
+
+可以直接复制下面的模板：
+
+```markdown
+## Mod 信息
+
+- Mod 名称：
+- Workshop ID：
+- Steam 页面：
+- 源码仓库：
+- 作者：
+- 许可证/分发授权：
+
+## 测试情况
+
+- [ ] 工坊项目已公开
+- [ ] 工坊包包含 workshop-plugin.json
+- [ ] DLL 位于 BepInEx/plugins
+- [ ] 订阅并下载后可以正常接入
+- [ ] 游戏内功能测试正常
+- [ ] 取消订阅或关闭后不会继续加载
+```
+
+维护者主要会确认：项目确实属于你、源码和授权清楚、工坊包格式正确，并且不会误导玩家。
+
+---
+
+## 第 5 步：等待自动检查
+
+提交 PR 后，GitHub 会自动运行检查。
+
+检查通过时会看到绿色标记。常见检查内容包括：
+
+- `mods.json` 是否是有效 JSON；
+- `id` 和 Workshop ID 是否重复；
+- Workshop ID 是否填写正确；
+- 工坊项目是否公开可访问；
+- 工坊项目是否属于 AppID `1991040`；
+- Steam 是否返回了有效标题。
+
+如果检查失败，不必重新创建 PR。直接在原分支继续修改并提交，PR 会自动重新检查。
+
+---
+
+<details>
+<summary><strong>可选：在本地提前检查</strong></summary>
+
+
+如果电脑安装了 .NET SDK 和 .NET Framework 4.8 targeting pack，可以在仓库根目录运行：
+
+```powershell
+dotnet build -c Release
+
+dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj `
+  -c Release -- --validate-index .\mods.json
+
+dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj `
+  -c Release -- --validate-index .\mods.json --verify-workshop
+```
+
+三个命令分别用于：
+
+1. 确认项目可以构建；
+2. 检查 `mods.json` 格式和重复项；
+3. 向 Steam 查询项目是否公开、存在且属于正确游戏。
+
+如果不方便安装开发环境，也可以直接提交 PR，再根据 GitHub 自动检查的提示修改。
+
+</details>
+
+---
+
+## 常见问题
+
+### 没有收录，我的 Mod 就不能运行吗？
+
+不是。中央索引只是推荐目录，不是加载白名单。只要工坊包合法并且玩家已经订阅、下载和启用，Workshop Bridge 就可以接入。
+
+未收录但已接入时，管理器会显示：
+
+```text
+Steam 工坊 · 未收录 · 已接入
+```
+
+### 收录后需要把 DLL 上传到 GitHub Release 吗？
+
+不需要。DLL 由 Steam Workshop 分发，索引中也不接受 DLL 下载地址。
+
+### 每次更新 Mod 都需要修改 `mods.json` 吗？
+
+通常不需要。保持同一个 Workshop ID，Steam 会自动向订阅者分发更新。
+
+只有在以下情况才需要再次提交：
+
+- 更换了 Workshop ID；
+- 想修改索引中固定的名称或简介；
+- 需要修正索引信息。
+
+### `name` 和 `description` 必须填写吗？
+
+不必。省略后会读取 Steam 标题和说明。
+
+如果填写了非空内容，管理器会优先显示索引中的文字。因此建议简介保持简短、客观，不要塞入下载链接或大段更新日志。
+
+### 工坊项目暂时是私密的，可以先提交吗？
+
+不建议。自动检查无法验证私密或仅好友可见的项目。请先公开，再提交 PR。
+
+### 可以直接填写完整 Steam 链接吗？
+
+可以，但更推荐纯数字 ID。支持的链接形式是：
+
+```text
 https://steamcommunity.com/sharedfiles/filedetails/?id=<WORKSHOP_ID>
 https://steamcommunity.com/workshop/filedetails/?id=<WORKSHOP_ID>
 ```
 
-`<WORKSHOP_ID>` 只是文档占位符，提交时必须替换为真实的非零 ASCII 十进制数字；不要把尖括号一起提交。建议直接填写无前导零的纯数字 ID。
+管理器最终只保存并使用规范化后的数字 ID。
 
-官方链接必须满足全部条件：
+### 一个工坊项目里可以有多个 DLL 吗？
 
-- scheme 为 `https`；
-- host 精确为 `steamcommunity.com`，不能是子域名、伪后缀或其他域名；
-- 只能使用默认 HTTPS 端口；
-- 不含用户名/密码信息或 `#fragment`；
-- 路径只能是上面两种 `filedetails` 路径，可带或不带末尾 `/`；
-- 查询字符串中必须恰好有一个小写 `id` 参数；
-- `id` 解码后必须是非零 ASCII 十进制数字，并且不能超出无符号 64 位整数范围；
-- 可以附带其他合法查询参数。
+可以。依赖 DLL 可以和主插件一起放在 `BepInEx/plugins/<插件目录>` 中。固定插件目录中至少要有一个真正的 BepInEx 插件 DLL。
 
-不接受 HTTP、`steam://`、短链接、任意第三方 URL、错误路径、重复/缺失 `id`、Unicode 数字、零或溢出值。
+---
 
-管理器只从链接中提取并规范化数字 ID；它永远不会直接打开索引提供的原始 URL，而是自行构造受信任的 Steam 页面地址。
+## 常见失败原因
 
-## 索引级拒绝规则
+| 提示或现象 | 通常原因 | 处理方法 |
+|---|---|---|
+| `workshopId 必须是 JSON 字符串` | Workshop ID 没有加双引号 | 改成 `"1234567890"` |
+| Workshop ID 重复 | 已有条目使用同一个工坊项目 | 搜索 `mods.json`，确认是否已经收录 |
+| Mod ID 重复 | `id` 与现有条目相同，大小写差异也算重复 | 换成稳定且唯一的 ID |
+| Steam 验证失败 | 项目私密、已删除或网络暂时失败 | 确认项目公开后重新运行检查 |
+| AppID 不正确 | 工坊项目不是发布在《学生时代》下 | 使用 AppID `1991040` 的项目 |
+| JSON 无法解析 | 漏了逗号、引号或括号 | 使用编辑器格式化 JSON，检查报错行 |
+| 名称没有按预期显示 | 索引中填写了固定 `name` | 修改/删除 `name`，或使用 Steam 标题 |
 
-验证器会在使用索引前检查**全部条目**。出现任一问题时，整份索引都会被拒绝，不会跳过坏条目：
+---
 
-- `schemaVersion` 不是 `1`，或缺少 `mods` 数组；
-- `mods` 中存在 `null` 条目；
-- Mod `id` 不是 JSON 字符串，或为空、带首尾空白、超过 128 字符、含控制字符；
-- Mod `id` 重复（忽略大小写）；
-- `name` 或 `description` 存在但不是 JSON 字符串/`null`；
-- `workshopId` 不是 JSON 字符串/`null`，或字符串内容非法；
-- 两个条目规范化后指向同一 Workshop ID。
+<details>
+<summary><strong>进阶规则（普通作者可以跳过）</strong></summary>
 
-因此，纯数字 `123` 与任何指向 ID `123` 的允许链接会被判定为重复。没有 `workshopId`，或值为 JSON `null`/空字符串的历史条目仍属于旧版直接下载兼容流程；新 DLL Mod 不应使用该流程。
+为了避免一个坏条目影响所有玩家，管理器和自动检查会使用同一套规则检查完整索引：
 
-## 修改 `mods.json`
+- `schemaVersion` 必须为 `1`，并且必须存在 `mods` 数组；
+- 每个条目都必须是对象，不能为 `null`；
+- `id` 必须是非空字符串，不能带首尾空白、控制字符或超过 128 个字符；
+- `id` 忽略大小写后必须唯一；
+- `workshopId` 必须存在并且是非空字符串；
+- Workshop ID 必须是非零 ASCII 十进制数字，且不能超出无符号 64 位整数范围；
+- 规范化后的 Workshop ID 必须唯一；
+- `name` 和 `description` 如果存在，只能是字符串或 `null`；
+- 不允许通过大小写不同的字段名重复定义同一字段。
 
-每个新工坊条目必须提供两个稳定字段：唯一的内部 `id`，以及合法的 `workshopId`。`name`、`description` 和旧版下载字段都不是工坊条目的必填项。最小模板如下；必须替换占位符，不能原样提交：
+在线 Steam 检查还会确认：
 
-```json
-{
-  "id": "<UNIQUE_MOD_ID>",
-  "workshopId": "<WORKSHOP_ID>"
-}
+- 项目公开且可以读取；
+- 返回的 ID 与请求一致；
+- 标题非空；
+- `consumer_app_id == 1991040`。
+
+Steam 返回的下载地址、文件名和路径不会进入索引。管理器只把 Steam 数据用于补全显示名称和简介。
+
+</details>
+
+---
+
+## 提交前快速检查
+
+```text
+[ ] Workshop ID 是真实数字，并且写在双引号中
+[ ] 工坊项目已经公开，属于 AppID 1991040
+[ ] workshop-plugin.json 内容和位置正确
+[ ] BepInEx/plugins 下有可用的插件 DLL
+[ ] mods.json 中的 id 和 Workshop ID 没有重复
+[ ] 没有添加 downloadUrl / assetType / installDir
+[ ] PR 的目标分支是 test
+[ ] PR 描述包含 Steam 页面、源码和授权信息
 ```
 
-如果希望由索引固定显示文案，可以另外提供：
-
-```json
-"name": "<显示名称>",
-"description": "<简短说明>"
-```
-
-非空的索引 `name`/`description` 始终优先，管理器不会用 Steam 内容覆盖或清理它们。字段省略、为 JSON `null`、空字符串或纯空白时，管理器才会从 Steam 补全；Steam 文本会先移除 HTML 实体、BBCode、控制/格式字符和多余空白，并限制显示长度。若 Steam 暂时不可用，会依次回退到本地缓存、内部 `id` 和说明文字“Steam 创意工坊项目”，不会因此拒绝已经通过本地规则的索引。
-
-若需要帮助旧用户清理历史直装版本，可以暂时保留原来的 `installDir`；管理器会显示“清理旧安装”。不要为工坊条目填写新的 DLL 下载地址。
-
-Steam 返回的 URL、路径、文件名、下载地址或安装信息一律不会被采用；元数据只用于名称和说明。页面链接仍由管理器根据规范化后的数字 ID 自行构造，工坊条目也绝不会回退到 DLL 直装。
-
-## 本地验证
-
-要求 Windows、.NET SDK 和 .NET Framework 4.8 targeting pack。在仓库根目录执行：
-
-```powershell
-dotnet build -c Release
-dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Release
-dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Release -- --validate-index .\mods.json
-dotnet run --project .\ModManager.Tests\StudentAgeModManager.Tests.csproj -c Release -- --validate-index .\mods.json --verify-workshop
-```
-
-第三条命令调用与运行时 `IndexClient.ParseAndValidate(...)` 相同的确定性生产验证逻辑。最后一条还会通过无需 API Key 的 Steam 官方接口实时确认每个项目存在且公开可读、返回 ID 一致、标题非空，并且 `consumer_app_id == 1991040`。成功时会同时输出 `Index validation passed` 和 `Steam Workshop verification passed`；网络错误、私有/已删除项目、错误 AppID 或其他验证失败都会返回非零退出码。
-
-## 提交 Pull Request
-
-1. 只修改必要的 `mods.json` 条目及相关文档；
-2. 不要提交 DLL、可执行文件、Steam 下载内容、`bin/`、`obj/` 或 `release_assets/`；
-3. 在 PR 中提供真实 Steam 工坊页面、源码仓库、作者/授权信息，以及离线和在线两种验证结果；
-4. 确认 Mod ID 与规范化后的 Workshop ID 均未重复；
-5. 等待 `Validate central mod index` 检查通过并接受维护者审查。
-
-来自 fork 的工作流仍应由维护者审查后运行。即使 CI 通过，维护者仍会核对页面归属、源码、授权和工坊包内容。
+准备好后就可以提交 PR。感谢你为《学生时代》Mod 社区贡献内容！

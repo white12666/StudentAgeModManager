@@ -11,7 +11,7 @@
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
     <Product>StudentAge Mod 管理器</Product>
-    <Description>StudentAge Mod 下载与更新管理器</Description>
+    <Description>StudentAge Steam Workshop 与本地 BepInEx Mod 管理器</Description>
     <DebugType>none</DebugType>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <ApplicationHighDpiMode>SystemAware</ApplicationHighDpiMode>

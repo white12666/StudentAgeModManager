@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -12,12 +13,19 @@ namespace StudentAgeModManager
 {
     public class MainForm : Form
     {
+        private const string ContributionUrl =
+            "https://github.com/white12666/StudentAgeModManager/blob/test/CONTRIBUTING.md";
+        private static readonly Font SectionFont =
+            new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
+        private static readonly Font SubmissionFont =
+            new Font("Microsoft YaHei UI", 8f);
+
         private readonly Label _lblGameDir = new Label();
         private readonly Label _lblBepInEx = new Label();
         private readonly Button _btnRefresh = new Button();
         private readonly Button _btnInstallBep = new Button();
         private readonly ComboBox _cmbMirror = new ComboBox();
-        private readonly FlowLayoutPanel _flow = new FlowLayoutPanel();
+        private readonly WheelFlowLayoutPanel _flow = new WheelFlowLayoutPanel();
         private readonly Label _lblStatus = new Label();
         private readonly ProgressBar _progress = new ProgressBar();
         private readonly Panel _banner = new Panel();
@@ -27,13 +35,19 @@ namespace StudentAgeModManager
         private readonly Label _workshopSetupText = new Label();
         private readonly Label _workshopManageTitle = new Label();
         private readonly Label _workshopManageText = new Label();
+        private readonly Panel _submissionFooter = new Panel();
+        private readonly LinkLabel _workshopSubmissionLink = new LinkLabel();
 
         private string _gameDir;
         private LocalState _state;
         private ModInstaller _installer;
+        private LocalPluginScanner _pluginScanner;
+        private LocalPluginManager _localPluginManager;
         private readonly Downloader _downloader = new Downloader();
         private IndexClient _indexClient;
         private ModIndex _index;
+        private List<LocalPluginUnit> _localUnits = new List<LocalPluginUnit>();
+        private int _localPluginCount;
         private bool _busy;
 
         public MainForm()
@@ -93,8 +107,8 @@ namespace StudentAgeModManager
             _workshopSetupText.Size = new Size(592, 36);
             _workshopSetupText.ForeColor = Color.FromArgb(35, 78, 121);
             _workshopSetupText.Text =
-                "点击“一键安装完整前置”即可。已有订阅不会自动开启；\r\n" +
-                "以后新订阅支持本功能的 DLL Mod，等 Steam 下载完成后，下次启动游戏会自动启用并生效。";
+                "点击“一键安装完整前置”。中央索引只是推荐目录，不是加载白名单；\r\n" +
+                "任何合法工坊 DLL 均可接入，新订阅在下载完成后的下一次启动自动启用。";
 
             _workshopManageTitle.Location = new Point(14, 68);
             _workshopManageTitle.Size = new Size(592, 19);
@@ -105,11 +119,13 @@ namespace StudentAgeModManager
             _workshopManageText.Size = new Size(592, 36);
             _workshopManageText.ForeColor = Color.FromArgb(35, 78, 121);
             _workshopManageText.Text =
-                "订阅和取消订阅请在 Steam 创意工坊操作，更新由 Steam 自动完成。\r\n" +
-                "开关 Mod 请进入游戏“本地”页操作，重启后生效；手动关闭后不会被再次自动开启。";
+                "工坊订阅/取消在 Steam，开关在游戏“本地”页；未收录但已接入的工坊也会显示。\r\n" +
+                "手动 DLL 显示为“本地 · 未收录”，可在下方开关；所有改动重启后生效。";
+
             _workshopGuide.Controls.AddRange(new Control[]
             {
-                _workshopSetupTitle, _workshopSetupText, _workshopManageTitle, _workshopManageText,
+                _workshopSetupTitle, _workshopSetupText, _workshopManageTitle,
+                _workshopManageText,
             });
 
             // ── BepInEx 缺失提示条 ──
@@ -130,10 +146,33 @@ namespace StudentAgeModManager
 
             // ── 卡片列表 ──
             _flow.Location = new Point(14, 196);
-            _flow.Size = new Size(592, 570 - _flow.Top);
+            _flow.Size = new Size(592, 548 - _flow.Top);
             _flow.AutoScroll = true;
             _flow.FlowDirection = FlowDirection.TopDown;
             _flow.WrapContents = false;
+
+            // ── 固定投稿页脚（位于滚动列表下方） ──
+            _submissionFooter.Location = new Point(0, 552);
+            _submissionFooter.Size = new Size(620, 24);
+            _submissionFooter.BackColor = Color.FromArgb(238, 240, 244);
+            const string submissionText =
+                "“收录”只表示进入 Git 推荐目录，可自定义显示名称与简介。欢迎 Mod 作者在 GitHub 提交收录。";
+            const string submissionLinkText = "GitHub 提交收录";
+            _workshopSubmissionLink.Text = submissionText;
+            _workshopSubmissionLink.Location = new Point(14, 3);
+            _workshopSubmissionLink.Size = new Size(592, 18);
+            _workshopSubmissionLink.Font = SubmissionFont;
+            _workshopSubmissionLink.TextAlign = ContentAlignment.MiddleLeft;
+            _workshopSubmissionLink.LinkColor = Color.FromArgb(24, 91, 168);
+            _workshopSubmissionLink.ActiveLinkColor = Color.FromArgb(170, 50, 50);
+            _workshopSubmissionLink.VisitedLinkColor = _workshopSubmissionLink.LinkColor;
+            _workshopSubmissionLink.LinkBehavior = LinkBehavior.HoverUnderline;
+            _workshopSubmissionLink.Links.Add(
+                submissionText.IndexOf(submissionLinkText, StringComparison.Ordinal),
+                submissionLinkText.Length, ContributionUrl);
+            _workshopSubmissionLink.LinkClicked += (s, e) =>
+                OpenContributionPage(e.Link.LinkData as string);
+            _submissionFooter.Controls.Add(_workshopSubmissionLink);
 
             // ── 底部状态栏 ──
             _lblStatus.Location = new Point(14, 580);
@@ -148,7 +187,7 @@ namespace StudentAgeModManager
             Controls.AddRange(new Control[]
             {
                 _lblGameDir, _lblBepInEx, _btnRefresh, _cmbMirror, _workshopGuide,
-                _banner, _flow, _lblStatus, _progress,
+                _banner, _flow, _submissionFooter, _lblStatus, _progress,
             });
         }
 
@@ -172,6 +211,8 @@ namespace StudentAgeModManager
             _lblGameDir.Text = "游戏目录: " + _gameDir;
             _state = new LocalState(_gameDir);
             _installer = new ModInstaller(_state, _downloader);
+            _pluginScanner = new LocalPluginScanner();
+            _localPluginManager = new LocalPluginManager(_state);
             var workshopMetadata = new WorkshopMetadataService(
                 new SteamWorkshopMetadataProvider(), _state.WorkshopMetadataCachePath);
             _indexClient = new IndexClient(_downloader, workshopMetadata);
@@ -205,8 +246,10 @@ namespace StudentAgeModManager
             }
             bool showBanner = !bepinExInstalled || !bridgeCurrent;
             _banner.Visible = showBanner;
-            _flow.Location = new Point(14, showBanner ? 234 : 196);
-            _flow.Height = 570 - _flow.Top;
+            int normalListTop = _workshopGuide.Bottom + 4;
+            _flow.Location = new Point(14,
+                showBanner ? _banner.Bottom + 4 : normalListTop);
+            _flow.Height = _submissionFooter.Top - 4 - _flow.Top;
         }
 
         // ═══════════════ 索引拉取与列表渲染 ═══════════════
@@ -214,21 +257,50 @@ namespace StudentAgeModManager
         private async Task RefreshIndexAsync()
         {
             if (_busy) return;
-            SetBusy(true, "正在获取 mod 列表...");
+            SetBusy(true, "正在获取工坊列表并扫描本地插件...");
+            Task<List<LocalPluginUnit>> localScan = ScanLocalPluginsAsync();
+            Exception indexError = null;
+            bool keptPreviousIndex = _index != null;
             try
             {
-                _index = await _indexClient.FetchAsync();
-                _state.Load();
+                try
+                {
+                    _index = await _indexClient.FetchAsync();
+                }
+                catch (Exception ex)
+                {
+                    indexError = ex;
+                    if (_index == null)
+                        _index = new ModIndex { mods = new List<ModEntry>() };
+                }
+
+                _localUnits = await localScan;
                 RenderList();
-                CheckSelfUpdate();
-                SetStatus("列表已更新（" + _index.mods.Count + " 个 mod，索引更新于 " + (_index.updatedAt ?? "?") + "）");
+                if (indexError == null)
+                {
+                    CheckSelfUpdate();
+                    SetStatus("列表已更新（" + _index.mods.Count + " 个工坊条目，" +
+                        _localPluginCount + " 个已安装插件单元，索引更新于 " +
+                        (_index.updatedAt ?? "?") + "）");
+                }
+                else
+                {
+                    string previousNote = keptPreviousIndex ? "保留上次工坊目录；" : string.Empty;
+                    SetStatus("工坊列表获取失败；" + previousNote + "已显示 " +
+                        _localPluginCount + " 个本地插件单元。" + indexError.Message);
+                    MessageBox.Show(this,
+                        "无法获取工坊列表，" +
+                        (keptPreviousIndex ? "当前保留上次目录；" : string.Empty) +
+                        "本地插件仍可管理。\n\n" + indexError.Message,
+                        "网络错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
             catch (Exception ex)
             {
-                SetStatus("获取列表失败: " + ex.Message);
+                SetStatus("刷新失败: " + ex.Message);
                 MessageBox.Show(this,
-                    "无法获取 mod 列表，请检查网络连接。\n\n" + ex.Message,
-                    "网络错误", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    "扫描或渲染 Mod 列表时发生错误，已保留当前可用界面。\n\n" + ex.Message,
+                    "刷新失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             finally
             {
@@ -236,33 +308,89 @@ namespace StudentAgeModManager
             }
         }
 
+        private Task<List<LocalPluginUnit>> ScanLocalPluginsAsync()
+        {
+            if (_pluginScanner == null || string.IsNullOrEmpty(_gameDir))
+                return Task.FromResult(new List<LocalPluginUnit>());
+            string gameDir = _gameDir;
+            return Task.Run(() => _pluginScanner.Scan(gameDir));
+        }
+
         private void RenderList()
         {
             _flow.SuspendLayout();
-            _flow.Controls.Clear();
-            foreach (var mod in _index.mods)
+            ClearRenderedControls();
+
+            var indexedMods = _index?.mods ?? new List<ModEntry>();
+            var localUnits = _localUnits ?? new List<LocalPluginUnit>();
+            _localPluginCount = localUnits.Count;
+            var consumedWorkshopUnits = new HashSet<LocalPluginUnit>();
+
+            if (indexedMods.Count > 0)
             {
-                var card = new ModCard();
-                var rec = _state.Get(mod.id);
-                card.Bind(mod, _state.GetStatus(mod), rec != null ? rec.version : null);
-                card.InstallClicked += async m => await InstallModAsync(m);
-                card.ToggleClicked += m => ToggleMod(m);
-                card.UninstallClicked += m => UninstallMod(m);
-                card.SetBusy(_busy);
-                _flow.Controls.Add(card);
+                _flow.Controls.Add(CreateSectionLabel("Steam 创意工坊目录"));
+                foreach (var mod in indexedMods)
+                {
+                    string workshopId;
+                    LocalPluginUnit installedUnit = null;
+                    if (WorkshopItem.TryGetId(mod, out workshopId))
+                    {
+                        installedUnit = localUnits.FirstOrDefault(unit =>
+                            unit.Source == LocalPluginSource.SteamWorkshop &&
+                            string.Equals(unit.WorkshopId, workshopId, StringComparison.Ordinal));
+                        if (installedUnit != null) consumedWorkshopUnits.Add(installedUnit);
+                    }
+
+                    var card = new ModCard();
+                    card.Bind(mod, installedUnit);
+                    card.WorkshopPageClicked += OpenWorkshopPage;
+                    card.SetBusy(_busy);
+                    _flow.Controls.Add(card);
+                }
             }
+
+            var remainingLocalUnits = localUnits
+                .Where(unit => !consumedWorkshopUnits.Contains(unit)).ToList();
+            if (remainingLocalUnits.Count > 0)
+            {
+                _flow.Controls.Add(CreateSectionLabel("本地已安装插件"));
+                foreach (var unit in remainingLocalUnits)
+                {
+                    var card = new ModCard();
+                    card.BindLocal(unit);
+                    card.WorkshopPageClicked += OpenWorkshopPage;
+                    card.ToggleLocalClicked += ToggleLocalPlugin;
+                    card.SetBusy(_busy);
+                    _flow.Controls.Add(card);
+                }
+            }
+
+            if (indexedMods.Count == 0 && remainingLocalUnits.Count == 0)
+                _flow.Controls.Add(CreateSectionLabel("未发现工坊目录条目或本地 BepInEx 插件。"));
             _flow.ResumeLayout();
         }
 
-        private void RebindCards()
+        private void ClearRenderedControls()
         {
-            foreach (Control c in _flow.Controls)
+            while (_flow.Controls.Count > 0)
             {
-                var card = c as ModCard;
-                if (card == null || card.Entry == null) continue;
-                var rec = _state.Get(card.Entry.id);
-                card.Bind(card.Entry, _state.GetStatus(card.Entry), rec != null ? rec.version : null);
+                Control control = _flow.Controls[0];
+                _flow.Controls.RemoveAt(0);
+                control.Dispose();
             }
+        }
+
+        private static Label CreateSectionLabel(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                Font = SectionFont,
+                ForeColor = Color.FromArgb(65, 65, 75),
+                Size = new Size(560, 25),
+                Padding = new Padding(6, 4, 0, 0),
+                Margin = new Padding(6, 5, 6, 0),
+            };
         }
 
         private void CheckSelfUpdate()
@@ -282,104 +410,48 @@ namespace StudentAgeModManager
 
         // ═══════════════ 操作 ═══════════════
 
-        private async Task InstallModAsync(ModEntry mod)
+        private void OpenWorkshopPage(string workshopId)
         {
             if (_busy) return;
-            if (WorkshopItem.IsDeclared(mod))
-            {
-                string workshopId;
-                if (!WorkshopItem.TryGetId(mod, out workshopId))
-                {
-                    MessageBox.Show(this, "索引中的创意工坊 ID 或链接无效，已拒绝回退为直接 DLL 安装。",
-                        "工坊条目无效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                try
-                {
-                    Process.Start(WorkshopItem.PageUrl(workshopId));
-                    SetStatus("请在 Steam 订阅；下载完成后的下一次游戏启动会自动启用合法 DLL 项目。" +
-                        "现有基线项目仍需在游戏“本地”页手动开启。");
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(this, ex.Message, "无法打开创意工坊", MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                }
-                return;
-            }
-            if (!_installer.IsBepInExInstalled())
-            {
-                MessageBox.Show(this, "请先安装 BepInEx 前置（顶部黄条一键安装）。",
-                    "缺少前置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-            SetBusy(true, "正在下载 " + mod.name + " ...");
             try
             {
-                await _installer.InstallAsync(mod, OnProgress);
-                SetStatus(mod.name + " 安装完成（" + mod.version + "）。改动需重启游戏生效。");
+                Process.Start(WorkshopItem.PageUrl(workshopId));
+                SetStatus("已打开工坊页面；订阅或取消订阅请在 Steam 中操作。" +
+                    "合法 DLL 项目会在下载完成后的下一次游戏启动接入。");
             }
             catch (Exception ex)
             {
-                SetStatus("安装失败: " + ex.Message);
-                ShowErrorWithManualLink(mod, ex);
+                MessageBox.Show(this, ex.Message, "无法打开创意工坊", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+        }
+
+        private async void ToggleLocalPlugin(LocalPluginUnit unit)
+        {
+            if (_busy) return;
+            bool enabling = unit.IsDisabled;
+            SetBusy(true, (enabling ? "正在启用 " : "正在禁用 ") + unit.DisplayName + " ...");
+            try
+            {
+                if (enabling)
+                    _localPluginManager.Enable(unit);
+                else
+                    _localPluginManager.Disable(unit);
+
+                _localUnits = await ScanLocalPluginsAsync();
+                RenderList();
+                SetStatus(unit.DisplayName + (enabling ? " 已启用" : " 已禁用") +
+                    "（重启游戏生效）");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "操作失败", MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
             }
             finally
             {
                 SetBusy(false, null);
-                RebindCards();
             }
-        }
-
-        private void ToggleMod(ModEntry mod)
-        {
-            if (_busy) return;
-            try
-            {
-                var rec = _state.Get(mod.id);
-                if (rec != null && rec.enabled)
-                {
-                    _installer.Disable(mod);
-                    SetStatus(mod.name + " 已禁用（重启游戏生效）");
-                }
-                else
-                {
-                    _installer.Enable(mod);
-                    SetStatus(mod.name + " 已启用（重启游戏生效）");
-                }
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, ex.Message, "操作失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-            RebindCards();
-        }
-
-        private void UninstallMod(ModEntry mod)
-        {
-            if (_busy) return;
-            bool workshopItem = WorkshopItem.IsDeclared(mod);
-            string prompt = workshopItem
-                ? "确定清理 " + mod.name + " 的旧版直装文件吗？\n\n" +
-                  "此操作不会取消 Steam 订阅，也不会删除 Steam 工坊目录。"
-                : "确定卸载 " + mod.name + " 吗？";
-            var r = MessageBox.Show(this, prompt, workshopItem ? "确认清理旧安装" : "确认卸载",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (r != DialogResult.Yes) return;
-            try
-            {
-                _installer.Uninstall(mod);
-                SetStatus(workshopItem
-                    ? mod.name + " 的旧版直装文件已清理；Steam 订阅未受影响。"
-                    : mod.name + " 已卸载");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, ex.Message, workshopItem ? "清理失败" : "卸载失败",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-            RebindCards();
         }
 
         private async Task InstallBepInExAsync()
@@ -457,15 +529,16 @@ namespace StudentAgeModManager
             _lblStatus.Text = text;
         }
 
-        private void ShowErrorWithManualLink(ModEntry mod, Exception ex)
+        private void OpenContributionPage(string url)
         {
-            var r = MessageBox.Show(this,
-                "下载或安装失败：\n" + ex.Message +
-                "\n\n是否打开该 mod 的发布页手动下载？",
-                "安装失败", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-            if (r == DialogResult.Yes && !string.IsNullOrEmpty(mod.repo))
+            try
             {
-                try { Process.Start("https://github.com/" + mod.repo + "/releases"); } catch { }
+                Process.Start(string.IsNullOrEmpty(url) ? ContributionUrl : url);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, ex.Message, "无法打开投稿说明",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
     }

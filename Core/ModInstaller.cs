@@ -1,9 +1,7 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
-using System.Linq;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Threading;
@@ -11,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace StudentAgeModManager.Core
 {
-    /// <summary>安装 / 更新 / 卸载 / 启用 / 禁用。</summary>
+    /// <summary>安装 BepInEx 前置与创意工坊 DLL Bridge。</summary>
     public class ModInstaller
     {
         public const string WorkshopBridgeFileName = "StudentAge.WorkshopBridge.dll";
@@ -51,137 +49,6 @@ namespace StudentAgeModManager.Core
             if (!IsWorkshopBridgeInstalled()) return false;
             try { return GetFileHash(WorkshopBridgePath) == GetEmbeddedBridgeHash(); }
             catch { return false; }
-        }
-
-        private string ResolveInstallDir(ModEntry entry)
-        {
-            var rel = (entry.installDir ?? "").Replace('/', '\\').Trim('\\');
-            if (rel.Length == 0 || rel.Contains("..")) throw new InvalidDataException("非法安装路径: " + entry.installDir);
-            return Path.Combine(_state.GameDir, rel);
-        }
-
-        /// <summary>安装或覆盖更新。返回写入的文件清单（相对游戏目录）。</summary>
-        public async Task InstallAsync(ModEntry entry, Action<int, string> progress,
-            CancellationToken ct = default(CancellationToken))
-        {
-            if (entry == null) throw new ArgumentNullException(nameof(entry));
-            if (WorkshopItem.IsDeclared(entry))
-                throw new InvalidOperationException(
-                    "创意工坊条目只能由 Steam 安装，已拒绝直接下载 DLL。");
-            EnsureGameNotRunning();
-            var installDir = ResolveInstallDir(entry);
-            var temp = await _downloader.DownloadFileAsync(entry.downloadUrl, progress, ct);
-            try
-            {
-                var files = new List<string>();
-                Directory.CreateDirectory(installDir);
-
-                if (string.Equals(entry.assetType, "zip", StringComparison.OrdinalIgnoreCase))
-                {
-                    using (var zip = ZipFile.OpenRead(temp)) // 同时起到校验 zip 有效的作用
-                    {
-                        foreach (var e in zip.Entries)
-                        {
-                            if (string.IsNullOrEmpty(e.Name)) continue; // 目录项
-                            var relPath = e.FullName.Replace('/', '\\');
-                            if (relPath.Contains("..")) continue;      // zip slip 防护
-                            var dest = Path.Combine(installDir, relPath);
-                            Directory.CreateDirectory(Path.GetDirectoryName(dest));
-                            e.ExtractToFile(dest, true);
-                            files.Add(RelativeToGame(dest));
-                        }
-                    }
-                }
-                else // dll：单文件
-                {
-                    var fileName = Path.GetFileName(new Uri(entry.downloadUrl).AbsolutePath);
-                    if (string.IsNullOrEmpty(fileName) || !fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                        fileName = entry.id + ".dll";
-                    var dest = Path.Combine(installDir, fileName);
-                    File.Copy(temp, dest, true);
-                    files.Add(RelativeToGame(dest));
-                }
-
-                // 收编旧记录中多余的文件（更新后不再存在的文件不主动删，避免误删用户配置）
-                _state.Set(entry.id, new InstalledMod
-                {
-                    version = entry.version,
-                    files = files,
-                    enabled = true,
-                });
-            }
-            finally
-            {
-                try { File.Delete(temp); } catch { }
-            }
-        }
-
-        public void Uninstall(ModEntry entry)
-        {
-            EnsureGameNotRunning();
-            var rec = _state.Get(entry.id);
-            var installDir = ResolveInstallDir(entry);
-
-            if (rec != null && rec.files != null && rec.files.Count > 0)
-            {
-                foreach (var rel in rec.files)
-                {
-                    try
-                    {
-                        var p = Path.Combine(_state.GameDir, rel);
-                        if (File.Exists(p)) File.Delete(p);
-                    }
-                    catch { }
-                }
-            }
-            // 目录空了就删目录；存量用户（无记录）直接删整个安装目录
-            try
-            {
-                if (Directory.Exists(installDir) &&
-                    (rec == null || !Directory.EnumerateFileSystemEntries(installDir).Any()))
-                    Directory.Delete(installDir, rec == null);
-            }
-            catch { }
-            // 同时清理禁用区
-            try
-            {
-                var disabled = Path.Combine(_state.DisabledDir, entry.id);
-                if (Directory.Exists(disabled)) Directory.Delete(disabled, true);
-            }
-            catch { }
-            _state.Remove(entry.id);
-        }
-
-        /// <summary>禁用：把安装目录整体移动到 disabled/&lt;id&gt;。</summary>
-        public void Disable(ModEntry entry)
-        {
-            EnsureGameNotRunning();
-            var rec = _state.Get(entry.id);
-            if (rec == null || !rec.enabled) return;
-            var installDir = ResolveInstallDir(entry);
-            var target = Path.Combine(_state.DisabledDir, entry.id);
-            if (!Directory.Exists(installDir)) throw new DirectoryNotFoundException("安装目录不存在: " + installDir);
-            if (Directory.Exists(target)) Directory.Delete(target, true);
-            Directory.CreateDirectory(_state.DisabledDir);
-            Directory.Move(installDir, target);
-            rec.enabled = false;
-            _state.Set(entry.id, rec);
-        }
-
-        /// <summary>启用：从 disabled/&lt;id&gt; 移回安装目录。</summary>
-        public void Enable(ModEntry entry)
-        {
-            EnsureGameNotRunning();
-            var rec = _state.Get(entry.id);
-            if (rec == null || rec.enabled) return;
-            var installDir = ResolveInstallDir(entry);
-            var source = Path.Combine(_state.DisabledDir, entry.id);
-            if (!Directory.Exists(source)) throw new DirectoryNotFoundException("禁用备份不存在: " + source);
-            if (Directory.Exists(installDir)) Directory.Delete(installDir, true);
-            Directory.CreateDirectory(Path.GetDirectoryName(installDir));
-            Directory.Move(source, installDir);
-            rec.enabled = true;
-            _state.Set(entry.id, rec);
         }
 
         /// <summary>安装 BepInEx 前置：下载 zip，解压到游戏根目录。</summary>
@@ -291,14 +158,6 @@ namespace StudentAgeModManager.Core
                 }
             }
             return "";
-        }
-
-        private string RelativeToGame(string fullPath)
-        {
-            var root = _state.GameDir.TrimEnd('\\') + "\\";
-            return fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
-                ? fullPath.Substring(root.Length)
-                : fullPath;
         }
 
         private static void EnsureGameNotRunning()

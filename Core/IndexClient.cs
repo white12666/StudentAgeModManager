@@ -10,9 +10,11 @@ namespace StudentAgeModManager.Core
     /// <summary>拉取并解析中央索引 mods.json；成功后把索引里的镜像列表回写给 Downloader。</summary>
     public class IndexClient
     {
-        /// <summary>中央索引 raw 地址（发布前改成实际仓库）。</summary>
+        /// <summary>
+        /// test 渠道固定读取 test 分支索引；合并并发布到稳定渠道时应与代码一起切回 main。
+        /// </summary>
         public const string DefaultIndexUrl =
-            "https://raw.githubusercontent.com/white12666/StudentAgeModManager/main/mods.json";
+            "https://raw.githubusercontent.com/white12666/StudentAgeModManager/test/mods.json";
 
         private readonly Downloader _downloader;
         private readonly WorkshopMetadataService _workshopMetadata;
@@ -152,7 +154,9 @@ namespace StudentAgeModManager.Core
                         "”与 " + firstLocation + " 重复（忽略大小写）。");
                 modIds.Add(entry.id, location);
 
-                if (!WorkshopItem.IsDeclared(entry)) continue;
+                if (!WorkshopItem.IsDeclared(entry))
+                    throw new InvalidDataException(location + "（" + entry.id +
+                        "）缺少 workshopId；索引不再支持直接下载 DLL。");
 
                 string normalizedWorkshopId;
                 string workshopError;
