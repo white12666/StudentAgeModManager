@@ -1,18 +1,25 @@
 {
-    "schemaVersion":  1,
-    "updatedAt":  "2026-07-15",
-    "mirrors":  [
-                    "https://ghproxy.net/",
-                    "https://gh-proxy.com/",
-                    "https://ghfast.top/"
-                ],
-    "manager":  {
-                    "version":  "1.1.0",
-                    "downloadUrl":  "https://github.com/white12666/StudentAgeModManager/releases/latest"
-                },
-    "bepinex":  {
-                    "version":  "5.4.23",
-                    "downloadUrl":  "https://github.com/white12666/StudentAgeModManager/releases/download/bepinex/BepInEx-5.4.23-package.zip"
-                },
-    "mods":  []
+	"schemaVersion": 1,
+	"updatedAt": "2026-07-15",
+	"mirrors": [
+		"https://ghproxy.net/",
+		"https://gh-proxy.com/",
+		"https://ghfast.top/"
+	],
+	"manager": {
+		"version": "1.1.0",
+		"downloadUrl": "https://github.com/white12666/StudentAgeModManager/releases/latest"
+	},
+	"bepinex": {
+		"version": "5.4.23",
+		"downloadUrl": "https://github.com/white12666/StudentAgeModManager/releases/download/bepinex/BepInEx-5.4.23-package.zip"
+	},
+	"mods": [
+		{
+			"id": "LFBetterAudio",
+			"name": "更好的音频效果",
+			"description": "为《学生时代》提供独立于原版音频系统的播放与演出能力",
+			"workshopId": "3763938041"
+		}
+	]
 }
