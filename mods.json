@@ -1,13 +1,13 @@
 {
 	"schemaVersion": 1,
-	"updatedAt": "2026-08-20",
+	"updatedAt": "2026-08-21",
 	"mirrors": [
 		"https://ghproxy.net/",
 		"https://gh-proxy.com/",
 		"https://ghfast.top/"
 	],
 	"manager": {
-		"version": "1.3.1",
+		"version": "1.3.4",
 		"downloadUrl": "https://github.com/white12666/StudentAgeModManager/releases/latest"
 	},
 	"bepinex": {

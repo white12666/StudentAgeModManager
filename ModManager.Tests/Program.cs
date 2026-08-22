@@ -102,11 +102,14 @@ namespace StudentAgeModManager.Tests
         private static void Run(string tempRoot)
         {
             var managerVersion = FileVersionInfo.GetVersionInfo(typeof(MainForm).Assembly.Location);
-            Assert(managerVersion.ProductVersion == "1.3.1" &&
+            Assert(managerVersion.ProductVersion == "1.3.4" &&
                    !managerVersion.ProductVersion.Contains("+"),
                 "release manager metadata should expose the exact public version without a stale Git suffix");
 
             // Run blocking async tests before WinForms installs its synchronization context.
+            RunWorkshopRelaunchTests(Path.Combine(tempRoot, "workshop-relaunch"));
+            RunInstallerTransactionTests(Path.Combine(tempRoot, "installer-transactions"));
+
             RunWorkshopReferenceTests();
             RunWorkshopPageLauncherTests();
             RunIndexValidationTests();
@@ -115,6 +118,7 @@ namespace StudentAgeModManager.Tests
             RunWheelFlowLayoutPanelTests();
             RunModCardUiTests();
             RunLocalPluginScannerTests(Path.Combine(tempRoot, "local-plugins"));
+
 
             var offlineRoot = Path.Combine(tempRoot, "offline-install");
             Directory.CreateDirectory(offlineRoot);
@@ -144,20 +148,12 @@ namespace StudentAgeModManager.Tests
             Assert(typeof(Downloader).GetMethod("DownloadFileAsync") == null,
                 "the index text downloader must not expose a mirrored binary download path");
 
-            var gameRoot = Path.Combine(tempRoot, "StudentAge");
-            Directory.CreateDirectory(Path.Combine(gameRoot, "BepInEx", "core"));
-            File.WriteAllBytes(Path.Combine(gameRoot, "winhttp.dll"), new byte[] { 1 });
+            var installer = offlineInstaller;
+            Assert(installer.IsBepInExInstalled(), "completed embedded install should be detected");
 
-            var installer = new ModInstaller(new LocalState(gameRoot));
-            Assert(installer.IsBepInExInstalled(), "fake BepInEx installation should be detected");
-
-            Assert(!installer.IsWorkshopBridgeInstalled(), "bridge should initially be absent");
-            Assert(!installer.IsWorkshopBridgeCurrent(), "absent bridge cannot be current");
-
-            installer.InstallWorkshopBridge();
-            Assert(File.Exists(installer.WorkshopBridgePath), "bridge should be extracted to patchers");
+            Assert(installer.IsWorkshopBridgeInstalled(), "bridge should be installed with the package");
             var bridgeVersion = FileVersionInfo.GetVersionInfo(installer.WorkshopBridgePath);
-            Assert(bridgeVersion.ProductVersion == "0.3.1" &&
+            Assert(bridgeVersion.ProductVersion == "0.4.0" &&
                    !bridgeVersion.ProductVersion.Contains("+"),
                 "embedded Bridge product version must not include a Git revision; unrelated " +
                 "manager or index commits must not change its exact-hash identity");
@@ -170,8 +166,273 @@ namespace StudentAgeModManager.Tests
 
             installer.InstallWorkshopBridge();
             Assert(installer.IsWorkshopBridgeCurrent(), "repair should restore the embedded bridge");
-            Assert(!File.Exists(installer.WorkshopBridgePath + ".tmp"),
-                "temporary extraction file should be cleaned up");
+            Assert(Directory.GetFiles(Path.GetDirectoryName(installer.WorkshopBridgePath),
+                       "*.tmp").Length == 0,
+                "unique Bridge commit temporaries should be cleaned up");
+        }
+        private static void RunInstallerTransactionTests(string root)
+        {
+            Directory.CreateDirectory(root);
+            string legacyRoot = Path.Combine(root, "legacy-third-party");
+            string legacyCore = Path.Combine(legacyRoot, "BepInEx", "core", "BepInEx.dll");
+            string legacyProxy = Path.Combine(legacyRoot, "winhttp.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(legacyCore));
+            byte[] legacyCoreBytes = { 1, 9, 8, 4 };
+            byte[] legacyProxyBytes = { 2, 7, 3 };
+            File.WriteAllBytes(legacyCore, legacyCoreBytes);
+            File.WriteAllBytes(legacyProxy, legacyProxyBytes);
+            var legacyInstaller = new ModInstaller(new LocalState(legacyRoot));
+            Assert(legacyInstaller.IsBepInExInstalled() &&
+                   !legacyInstaller.IsEmbeddedBepInExPackageCurrent(),
+                "valid unmarked legacy or third-party BepInEx must remain installed but unverified");
+            legacyInstaller.InstallWorkshopBridge();
+            Assert(legacyInstaller.IsWorkshopBridgeCurrent() &&
+                   File.ReadAllBytes(legacyCore).SequenceEqual(legacyCoreBytes) &&
+                   File.ReadAllBytes(legacyProxy).SequenceEqual(legacyProxyBytes),
+                "legacy upgrade must take the Bridge-only path without replacing BepInEx bytes");
+
+            string repairRoot = Path.Combine(root, "marker-repair");
+            var repairInstaller = new ModInstaller(new LocalState(repairRoot));
+            repairInstaller.InstallBepInExAsync(null).GetAwaiter().GetResult();
+            string marker = Path.Combine(repairRoot, "BepInEx", "ModManager",
+                "bepinex-install.complete");
+            File.Delete(marker);
+            Assert(repairInstaller.IsBepInExInstalled() &&
+                   !repairInstaller.IsEmbeddedBepInExPackageCurrent(),
+                "an unmarked but structurally valid tree must remain usable as a legacy install " +
+                "without being claimed as manager-verified");
+            repairInstaller.InstallBepInExAsync(null).GetAwaiter().GetResult();
+            Assert(repairInstaller.IsBepInExInstalled() &&
+                   repairInstaller.IsEmbeddedBepInExPackageCurrent(),
+                "rerunning installation must deterministically restore the exact package marker");
+            string[] validMarker = File.ReadAllLines(marker);
+            Assert(validMarker.Length > 3 &&
+                   validMarker[0] == "StudentAgeModManager.BepInExComplete|1" &&
+                   validMarker[1] == "PackageSha256|" +
+                       ModInstaller.EmbeddedBepInExPackageSha256 &&
+                   validMarker[2] == "FileCount|" + (validMarker.Length - 3),
+                "completion marker must identify the package and exact manifest count");
+            File.WriteAllLines(marker, validMarker.Take(validMarker.Length - 1).ToArray());
+            Assert(!repairInstaller.IsBepInExInstalled() &&
+                   !repairInstaller.IsEmbeddedBepInExPackageCurrent(),
+                "a truncated marker subset must never validate as a complete install");
+            File.WriteAllLines(marker, validMarker);
+            Assert(repairInstaller.IsEmbeddedBepInExPackageCurrent(),
+                "restoring the exact marker entry set must restore verified state");
+            string leaseRoot = Path.Combine(root, "lease-contention");
+            var leaseInstaller = new ModInstaller(new LocalState(leaseRoot));
+            Exception leaseError = null;
+            var installStarted = new ManualResetEvent(false);
+            var installFinished = new ManualResetEvent(false);
+            var installThread = new Thread(() =>
+            {
+                try
+                {
+                    installStarted.Set();
+                    leaseInstaller.InstallBepInExAsync(null).GetAwaiter().GetResult();
+                }
+                catch (Exception ex) { leaseError = ex; }
+                finally { installFinished.Set(); }
+            }) { IsBackground = true };
+            using (WorkshopBridgeTransaction.Acquire(leaseRoot))
+            {
+                installThread.Start();
+                Assert(installStarted.WaitOne(TimeSpan.FromSeconds(5)) &&
+                       !installFinished.WaitOne(TimeSpan.FromMilliseconds(250)),
+                    "BepInEx live commit must contend on the shared game transaction");
+            }
+            Assert(installFinished.WaitOne(TimeSpan.FromSeconds(20)) &&
+                   installThread.Join(TimeSpan.FromSeconds(1)) && leaseError == null &&
+                   leaseInstaller.IsBepInExInstalled(),
+                "BepInEx install must resume and commit after the game transaction is released");
+            string failureRoot = Path.Combine(root, "precommit-failure");
+            Directory.CreateDirectory(failureRoot);
+            string oldProxy = Path.Combine(failureRoot, "winhttp.dll");
+            byte[] oldBytes = { 7, 6, 5, 4 };
+            File.WriteAllBytes(oldProxy, oldBytes);
+            var failureInstaller = new ModInstaller(new LocalState(failureRoot));
+            SetPrivateField(failureInstaller, "_beforeAtomicCommit", (Action<string>)(path =>
+            {
+                if (string.Equals(path, oldProxy, StringComparison.OrdinalIgnoreCase))
+                    throw new IOException("injected before replacement");
+            }));
+            AssertThrows<IOException>(() => failureInstaller.InstallBepInExAsync(null)
+                    .GetAwaiter().GetResult(),
+                "failure immediately before atomic replacement must surface");
+            string incompleteMarker = Path.Combine(failureRoot, "BepInEx", "ModManager",
+                "bepinex-install.incomplete");
+            Assert(File.ReadAllBytes(oldProxy).SequenceEqual(oldBytes) &&
+                   File.Exists(incompleteMarker) && !failureInstaller.IsBepInExInstalled(),
+                "pre-commit failure must preserve old bytes and leave an interruption record");
+            string markerDeleteRoot = Path.Combine(root, "marker-delete-failure");
+            var markerDeleteInstaller = new ModInstaller(new LocalState(markerDeleteRoot));
+            string markerDeleteIncomplete = Path.Combine(markerDeleteRoot, "BepInEx", "ModManager",
+                "bepinex-install.incomplete");
+            string markerDeleteComplete = Path.Combine(markerDeleteRoot, "BepInEx", "ModManager",
+                "bepinex-install.complete");
+            FileStream lockedIncomplete = null;
+            var deletionProgress = new List<int>();
+            SetPrivateField(markerDeleteInstaller, "_beforeAtomicCommit", (Action<string>)(path =>
+            {
+                if (string.Equals(path, markerDeleteComplete, StringComparison.OrdinalIgnoreCase))
+                    lockedIncomplete = new FileStream(markerDeleteIncomplete, FileMode.Open,
+                        FileAccess.Read, FileShare.None);
+            }));
+            try
+            {
+                AssertThrows<IOException>(() => markerDeleteInstaller.InstallBepInExAsync(
+                        (percent, source) => deletionProgress.Add(percent)).GetAwaiter().GetResult(),
+                    "failure to remove the interruption marker must make installation fail");
+            }
+            finally
+            {
+                if (lockedIncomplete != null) lockedIncomplete.Dispose();
+            }
+            Assert(!markerDeleteInstaller.IsBepInExInstalled() &&
+                   deletionProgress.All(percent => percent != 100),
+                "an uncleared interruption marker must never report installed or 100 percent");
+
+            string concurrentRoot = Path.Combine(root, "concurrent-bridge");
+            var initial = new ModInstaller(new LocalState(concurrentRoot));
+            initial.InstallBepInExAsync(null).GetAwaiter().GetResult();
+            File.AppendAllText(initial.WorkshopBridgePath, "stale");
+            Exception firstError = null;
+            Exception secondError = null;
+            var firstHeld = new ManualResetEvent(false);
+            var releaseFirst = new ManualResetEvent(false);
+            var secondCommit = new ManualResetEvent(false);
+            var firstInstaller = new ModInstaller(new LocalState(concurrentRoot));
+            var secondInstaller = new ModInstaller(new LocalState(concurrentRoot));
+            SetPrivateField(firstInstaller, "_beforeAtomicCommit", (Action<string>)(path =>
+            {
+                if (!string.Equals(path, firstInstaller.WorkshopBridgePath,
+                    StringComparison.OrdinalIgnoreCase)) return;
+                firstHeld.Set();
+                if (!releaseFirst.WaitOne(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException("test did not release first Bridge commit");
+            }));
+            SetPrivateField(secondInstaller, "_beforeAtomicCommit", (Action<string>)(path =>
+            {
+                if (string.Equals(path, secondInstaller.WorkshopBridgePath,
+                    StringComparison.OrdinalIgnoreCase)) secondCommit.Set();
+            }));
+            var first = new Thread(() =>
+            {
+                try { firstInstaller.InstallWorkshopBridge(); }
+                catch (Exception ex) { firstError = ex; }
+            }) { IsBackground = true };
+            var second = new Thread(() =>
+            {
+                try { secondInstaller.InstallWorkshopBridge(); }
+                catch (Exception ex) { secondError = ex; }
+            }) { IsBackground = true };
+            try
+            {
+                first.Start();
+                Assert(firstHeld.WaitOne(TimeSpan.FromSeconds(5)),
+                    "first Bridge repair must reach the atomic commit while holding the game lease");
+                second.Start();
+                Assert(!secondCommit.WaitOne(TimeSpan.FromMilliseconds(250)),
+                    "a concurrent Bridge repair must block before creating or committing its live temp");
+            }
+            finally
+            {
+                releaseFirst.Set();
+            }
+            Assert(first.Join(TimeSpan.FromSeconds(10)) && second.Join(TimeSpan.FromSeconds(10)),
+                "concurrent Bridge repair threads must finish within a bounded time");
+            Assert(secondCommit.WaitOne(0) && firstError == null && secondError == null &&
+                   initial.IsWorkshopBridgeCurrent(),
+                "concurrent Bridge repair must serialize and verify each committed invocation");
+            Assert(Directory.GetFiles(Path.GetDirectoryName(initial.WorkshopBridgePath),
+                       "*.tmp").Length == 0,
+                "concurrent Bridge repair must clean each invocation's unique temporary");
+            firstHeld.Dispose();
+            releaseFirst.Dispose();
+            secondCommit.Dispose();
+        }
+        private static void RunWorkshopRelaunchTests(string root)
+        {
+            string managerAssemblyPath = typeof(MainForm).Assembly.Location;
+            Type programType = typeof(MainForm).Assembly.GetType("StudentAgeModManager.Program", true);
+            MethodInfo isWorkshopPath = programType.GetMethod("IsStudentAgeWorkshopItemPath",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert(isWorkshopPath != null,
+                "manager should expose its Workshop launch-path classifier for regression coverage");
+
+            string workshopExe = Path.Combine(root, "steamapps", "workshop", "content",
+                "1991040", "123456789", "ModManager.exe");
+            string ordinaryExe = Path.Combine(root, "Downloads", "ModManager.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(workshopExe));
+            Directory.CreateDirectory(Path.GetDirectoryName(ordinaryExe));
+            File.Copy(managerAssemblyPath, workshopExe);
+            File.Copy(managerAssemblyPath, ordinaryExe);
+
+            Assert((bool)isWorkshopPath.Invoke(null, new object[] { workshopExe }),
+                "an executable in steamapps/workshop/content/1991040/<id> must relaunch outside Workshop");
+            Assert(!(bool)isWorkshopPath.Invoke(null, new object[] { ordinaryExe }),
+                "an ordinary downloaded executable must continue running in place");
+            Assert(!(bool)isWorkshopPath.Invoke(null, new object[]
+                { Path.Combine(root, "steamapps", "workshop", "content", "1991040", "not-an-id", "ModManager.exe") }),
+                "a lookalike path without a canonical numeric Workshop ID must not trigger relocation");
+            Assert(!(bool)isWorkshopPath.Invoke(null, new object[]
+                { Path.Combine(root, "steamapps", "workshop", "content", "999", "123", "ModManager.exe") }),
+                "another game's Workshop item must not trigger StudentAge relocation");
+            MethodInfo relaunch = programType.GetMethod("RelaunchWorkshopExecutable",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert(relaunch != null,
+                "manager should expose the serialized Workshop shadow-launch boundary");
+            string runtimeRoot = Path.Combine(root, "runtime");
+            var firstAtStart = new ManualResetEvent(false);
+            var releaseFirst = new ManualResetEvent(false);
+            var secondAtStart = new ManualResetEvent(false);
+            string firstChild = null;
+            Action<string> firstCallback = path =>
+            {
+                firstChild = path;
+                firstAtStart.Set();
+                if (!releaseFirst.WaitOne(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException("test did not release first shadow launch");
+                throw new IOException("stop before actual process creation");
+            };
+            Action<string> secondCallback = path =>
+            {
+                secondAtStart.Set();
+                throw new IOException("stop before actual process creation");
+            };
+            var firstLaunch = new Thread(() =>
+            {
+                try { relaunch.Invoke(null, new object[]
+                    { workshopExe, new[] { "first argument" }, runtimeRoot, firstCallback }); }
+                catch (TargetInvocationException) { }
+            }) { IsBackground = true };
+            var secondLaunch = new Thread(() =>
+            {
+                try { relaunch.Invoke(null, new object[]
+                    { workshopExe, new[] { "second" }, runtimeRoot, secondCallback }); }
+                catch (TargetInvocationException) { }
+            }) { IsBackground = true };
+            try
+            {
+                firstLaunch.Start();
+                Assert(firstAtStart.WaitOne(TimeSpan.FromSeconds(5)) && File.Exists(firstChild),
+                    "the copied shadow child must exist immediately through the Process.Start boundary");
+                secondLaunch.Start();
+                Assert(!secondAtStart.WaitOne(TimeSpan.FromMilliseconds(250)) && File.Exists(firstChild),
+                    "a concurrent launcher must not clean another launch's not-yet-started child");
+            }
+            finally
+            {
+                releaseFirst.Set();
+            }
+            Assert(firstLaunch.Join(TimeSpan.FromSeconds(10)) &&
+                   secondLaunch.Join(TimeSpan.FromSeconds(10)),
+                "concurrent shadow-launch threads must finish within a bounded time");
+            Assert(secondAtStart.WaitOne(0),
+                "the waiting launcher must proceed after the launch mutex is released");
+            firstAtStart.Dispose();
+            releaseFirst.Dispose();
+            secondAtStart.Dispose();
         }
 
         private static void RunWorkshopReferenceTests()
@@ -1383,9 +1644,7 @@ namespace StudentAgeModManager.Tests
                 Assert(flow.Bottom + 4 == submissionFooter.Top,
                     "banner-visible Mod list must end before the fixed contribution footer");
 
-                Directory.CreateDirectory(Path.Combine(gameRoot, "BepInEx", "core"));
-                File.WriteAllBytes(Path.Combine(gameRoot, "winhttp.dll"), new byte[] { 1 });
-                installer.InstallWorkshopBridge();
+                installer.InstallBepInExAsync(null).GetAwaiter().GetResult();
                 InvokePrivate(form, "UpdateBepInExUi");
                 Assert(flow.Top == 196 && guide.Bottom <= flow.Top,
                     "hidden prerequisite banner must leave the mod list below the guide");
@@ -1656,6 +1915,20 @@ namespace StudentAgeModManager.Tests
                     "re-rendering should dispose removed cards and labels instead of leaking handles");
             }
 
+            using (var disposedProgressForm = new MainForm())
+            {
+                SetPrivateField(disposedProgressForm, "_initializeOnShown", false);
+                disposedProgressForm.Show();
+                Application.DoEvents();
+                disposedProgressForm.Dispose();
+                MethodInfo onProgress = typeof(MainForm).GetMethod("OnProgress",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert(onProgress != null,
+                    "MainForm should retain a guarded installation progress callback");
+                onProgress.Invoke(disposedProgressForm, new object[] { 50, "late callback" });
+                Assert(disposedProgressForm.IsDisposed,
+                    "a progress callback arriving after deferred close must be ignored safely");
+            }
             using (var scrollForm = new MainForm())
             using (var scrollFlow = new WheelFlowLayoutPanel
             {
@@ -1744,8 +2017,14 @@ namespace StudentAgeModManager.Tests
                        -focusFlow.AutoScrollPosition.Y == offsetBeforeBusy,
                     "entering busy state must clear card focus before disabling " +
                     "buttons, preventing WinForms from walking focus and scrolling to the bottom");
-                setBusyMethod.Invoke(focusForm, new object[] { false, null });
                 focusForm.Close();
+                Application.DoEvents();
+                Assert(!focusForm.IsDisposed && GetPrivateField<bool>(focusForm, "_closePending"),
+                    "closing during a mutation must be deferred rather than abandoning it");
+                setBusyMethod.Invoke(focusForm, new object[] { false, null });
+                Application.DoEvents();
+                Assert(focusForm.IsDisposed,
+                    "a deferred close must complete immediately after the mutation leaves busy state");
             }
         }
 
@@ -2147,10 +2426,13 @@ namespace StudentAgeModManager.Tests
                    conflictingUnits.All(unit => unit.HasPathConflict),
                 "enabled and disabled same-name plugins should be visibly marked as a path conflict");
             long rootLength = new FileInfo(rootDll).Length;
-            AssertThrows<IOException>(() => manager.Disable(rootPlugin),
-                "disabling must refuse to overwrite an existing disabled file");
-            Assert(File.Exists(rootDll) && new FileInfo(rootConflict).Length == rootLength,
-                "an enable/disable collision must leave both source and target untouched");
+            string staleCardArchive = manager.Disable(rootPlugin);
+            Assert(staleCardArchive != null && File.Exists(staleCardArchive) &&
+                   !File.Exists(rootDll) && File.Exists(rootConflict),
+                "a stale card without HasPathConflict must revalidate and archive the live target under lock");
+            File.Copy(rootConflict, rootDll);
+            conflictingUnits = scanner.Scan(gameRoot)
+                .Where(unit => unit.UnitKey == "RootMod.dll").ToList();
 
             // 冲突不再是死胡同：带 HasPathConflict 标记的单元可以照常禁用，
             // 目标位置的旧副本先被整体归档到 conflict-backup，从不覆盖丢失。
@@ -2194,6 +2476,21 @@ namespace StudentAgeModManager.Tests
             Assert(File.Exists(rootDll) && !File.Exists(rootConflict) &&
                    new FileInfo(rootDll).Length == rootLength,
                 "conflict-aware enable must restore the disabled copy into BepInEx/plugins");
+            File.Copy(rootDll, rootConflict);
+            LocalPluginUnit rollbackUnit = scanner.Scan(gameRoot)
+                .Single(unit => unit.UnitKey == "RootMod.dll" && !unit.IsDisabled);
+            long rollbackSourceLength = new FileInfo(rootDll).Length;
+            long rollbackTargetLength = new FileInfo(rootConflict).Length;
+            SetPrivateField(manager, "_beforeSourceMove", (Action<string>)(path =>
+                { throw new IOException("injected after archive"); }));
+            AssertThrows<IOException>(() => manager.Disable(rollbackUnit),
+                "a failure after conflict archive must surface after conditional rollback");
+            Assert(File.Exists(rootDll) && File.Exists(rootConflict) &&
+                   new FileInfo(rootDll).Length == rollbackSourceLength &&
+                   new FileInfo(rootConflict).Length == rollbackTargetLength,
+                "failure after archive must restore the old target without losing the source copy");
+            SetPrivateField(manager, "_beforeSourceMove", null);
+            File.Delete(rootConflict);
 
             manager.Disable(rootPlugin);
             Assert(!File.Exists(rootDll) && File.Exists(rootConflict),

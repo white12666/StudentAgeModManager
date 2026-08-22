@@ -47,7 +47,20 @@ namespace StudentAge.WorkshopBridge
     {
         private const string WorkshopPluginRelativePath = @"BepInEx\plugins";
 
+        public static WorkshopDiscoveryResult Discover(string gameRootPath)
+        {
+            using (WorkshopBridgeTransaction.Acquire(gameRootPath))
+                return DiscoverUnderLease(BridgeOptions.ForGame(gameRootPath));
+        }
+
         public static WorkshopDiscoveryResult Discover(BridgeOptions options)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            using (WorkshopBridgeTransaction.Acquire(options.GameRootPath))
+                return DiscoverUnderLease(options);
+        }
+
+        private static WorkshopDiscoveryResult DiscoverUnderLease(BridgeOptions options)
         {
             var output = new WorkshopDiscoveryResult();
             try
@@ -72,7 +85,23 @@ namespace StudentAge.WorkshopBridge
             }
         }
 
+        public static WorkshopToggleResult SetEnabled(string gameRootPath,
+            string canonicalWorkshopId, bool enabled)
+        {
+            using (WorkshopBridgeTransaction.Acquire(gameRootPath))
+                return SetEnabledUnderLease(BridgeOptions.ForGame(gameRootPath),
+                    canonicalWorkshopId, enabled);
+        }
+
         public static WorkshopToggleResult SetEnabled(BridgeOptions options,
+            string canonicalWorkshopId, bool enabled)
+        {
+            if (options == null) throw new ArgumentNullException(nameof(options));
+            using (WorkshopBridgeTransaction.Acquire(options.GameRootPath))
+                return SetEnabledUnderLease(options, canonicalWorkshopId, enabled);
+        }
+
+        private static WorkshopToggleResult SetEnabledUnderLease(BridgeOptions options,
             string canonicalWorkshopId, bool enabled)
         {
             var output = new WorkshopToggleResult { IsEnabled = enabled };
@@ -98,12 +127,14 @@ namespace StudentAge.WorkshopBridge
                     throw new InvalidOperationException("工坊 DLL 包无效: " +
                         (item.ValidationError ?? "缺少合法声明或插件目录。"));
 
-                // Mark the item as seen before changing _mod. This guarantees that a manual
-                // disable remains disabled across future Workshop updates and sync passes.
+                // Persist the manual-choice marker first, but retain exact prior bytes so a
+                // failed _mod commit cannot leave state claiming a choice that never happened.
+                byte[] oldStateBytes = File.Exists(context.StatePath)
+                    ? File.ReadAllBytes(context.StatePath) : null;
                 HashSet<ulong> seenIds;
                 HashSet<ulong> pendingIds;
                 string stateError;
-                if (!File.Exists(context.StatePath))
+                if (oldStateBytes == null)
                 {
                     seenIds = new HashSet<ulong>(context.Subscriptions.SubscribedIds);
                     pendingIds = new HashSet<ulong>();
@@ -125,9 +156,29 @@ namespace StudentAge.WorkshopBridge
                 string modError;
                 if (!WorkshopBridgeSynchronizer.TrySetActiveId(context.ActiveListPath,
                     workshopId, enabled, out changed, out modError))
+                {
+                    try
+                    {
+                        if (oldStateBytes == null)
+                        {
+                            if (File.Exists(context.StatePath)) File.Delete(context.StatePath);
+                        }
+                        else
+                        {
+                            WorkshopBridgeSynchronizer.WriteFileAtomically(context.StatePath,
+                                oldStateBytes);
+                        }
+                    }
+                    catch (Exception rollback)
+                    {
+                        throw new IOException("无法更新游戏 Mod 启用列表: " + modError +
+                            "；同时无法恢复 Bridge 状态: " + rollback.Message);
+                    }
                     throw new IOException("无法更新游戏 Mod 启用列表: " + modError);
+                }
 
-                BridgeResult synchronization = WorkshopBridgeSynchronizer.Synchronize(options);
+                BridgeResult synchronization =
+                    WorkshopBridgeSynchronizer.SynchronizeUnderLease(options);
                 output.Succeeded = true;
                 output.Changed = changed;
                 output.Synchronization = synchronization;
@@ -178,16 +229,22 @@ namespace StudentAge.WorkshopBridge
 
             string linkPath = Path.Combine(context.PluginRoot,
                 WorkshopBridgeSynchronizer.LinkDirectoryName, item.WorkshopId);
-            try
+            ulong workshopId;
+            string installedManifest;
+            if (ulong.TryParse(item.WorkshopId, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out workshopId) &&
+                context.Subscriptions.DownloadedIds.Contains(workshopId) &&
+                context.Subscriptions.InstalledManifests.TryGetValue(workshopId,
+                    out installedManifest))
             {
-                if (Directory.Exists(linkPath))
-                {
-                    FileAttributes attributes = File.GetAttributes(linkPath);
-                    item.IsConnected = (attributes & FileAttributes.Directory) != 0 &&
-                        (attributes & FileAttributes.ReparsePoint) != 0;
-                }
+                string expectedSnapshot = WorkshopBridgeSynchronizer.GetSnapshotPath(
+                    context.Options, workshopId, installedManifest);
+                bool pointsToExpected;
+                string targetError;
+                item.IsConnected = JunctionManager.TryPointsToSameDirectory(linkPath,
+                    expectedSnapshot, out pointsToExpected, out targetError) &&
+                    pointsToExpected;
             }
-            catch { }
 
             if (!Directory.Exists(itemRoot))
             {
@@ -301,7 +358,9 @@ namespace StudentAge.WorkshopBridge
 
                 if (!string.Equals(markerFileName, Path.GetFileName(markerFileName),
                         StringComparison.Ordinal) ||
-                    markerFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                    markerFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
+                    string.Equals(markerFileName, ".bridge-snapshot",
+                        StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("DLL 工坊声明文件名不符合安全约束。");
 
                 FileAttributes profileAttributes = File.GetAttributes(profileDirectory);
@@ -346,6 +405,7 @@ namespace StudentAge.WorkshopBridge
                     ActiveListPath = activeListPath,
                     StatePath = statePath,
                     Subscriptions = subscriptions,
+                    Options = options,
                 };
                 return true;
             }
@@ -374,6 +434,7 @@ namespace StudentAge.WorkshopBridge
             public string MarkerFileName { get; set; }
             public string ActiveListPath { get; set; }
             public string StatePath { get; set; }
+            public BridgeOptions Options { get; set; }
             public WorkshopSubscriptionSnapshot Subscriptions { get; set; }
         }
     }

@@ -49,12 +49,12 @@ namespace StudentAgeModManager
         private readonly WorkshopPageLauncher _workshopPageLauncher =
             new WorkshopPageLauncher();
         private Func<string, BridgeResult> _workshopSynchronizer = gameDir =>
-            WorkshopBridgeSynchronizer.Synchronize(BridgeOptions.ForGame(gameDir));
+            WorkshopBridgeSynchronizer.Synchronize(gameDir);
         private Func<string, WorkshopDiscoveryResult> _workshopDiscoverer = gameDir =>
-            WorkshopBridgeManagement.Discover(BridgeOptions.ForGame(gameDir));
+            WorkshopBridgeManagement.Discover(gameDir);
         private Func<string, string, bool, WorkshopToggleResult> _workshopToggler =
             (gameDir, workshopId, enabled) => WorkshopBridgeManagement.SetEnabled(
-                BridgeOptions.ForGame(gameDir), workshopId, enabled);
+                gameDir, workshopId, enabled);
         private Func<bool> _isGameRunning = ModInstaller.IsGameRunning;
         private Action<string> _workshopToggleErrorPresenter;
         private IndexClient _indexClient;
@@ -64,6 +64,8 @@ namespace StudentAgeModManager
         private int _localPluginCount;
         private bool _busy;
         private bool _initializeOnShown = true;
+        private bool _closePending;
+        private bool _allowClose;
 
         public MainForm()
         {
@@ -88,6 +90,7 @@ namespace StudentAgeModManager
             {
                 if (_initializeOnShown) await InitializeAsync();
             };
+            FormClosing += MainForm_FormClosing;
         }
 
         private static string CurrentVersion()
@@ -684,6 +687,7 @@ namespace StudentAgeModManager
             {
                 MessageBox.Show(this, ex.Message, "操作失败", MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
+                await RescanAfterMutationFailureAsync(listScrollOffset);
             }
             finally
             {
@@ -765,6 +769,7 @@ namespace StudentAgeModManager
             catch (Exception ex)
             {
                 _workshopToggleErrorPresenter(ex.Message);
+                await RescanAfterMutationFailureAsync(listScrollOffset);
             }
             finally
             {
@@ -834,12 +839,45 @@ namespace StudentAgeModManager
                 UpdateBepInExUi();
             }
         }
+        private async Task RescanAfterMutationFailureAsync(int listScrollOffset)
+        {
+            try
+            {
+                _workshopDiscovery = await DiscoverWorkshopItemsAsync();
+                _localUnits = await ScanLocalPluginsAsync(_workshopDiscovery != null &&
+                    _workshopDiscovery.Succeeded ? _workshopDiscovery.Items : null);
+                RenderListAtScrollOffset(listScrollOffset);
+            }
+            catch
+            {
+                // Preserve the original mutation error. The next manual refresh retries discovery.
+            }
+        }
+
+        private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            if (_allowClose || !_busy) return;
+            e.Cancel = true;
+            _closePending = true;
+            SetStatus("当前操作完成后将关闭管理器…");
+        }
 
         // ═══════════════ 辅助 ═══════════════
 
         private void OnProgress(int percent, string source)
         {
-            if (InvokeRequired) { BeginInvoke(new Action<int, string>(OnProgress), percent, source); return; }
+            if (IsDisposed || Disposing || !IsHandleCreated || _allowClose) return;
+            if (InvokeRequired)
+            {
+                try
+                {
+                    BeginInvoke(new Action<int, string>(OnProgress), percent, source);
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { }
+                return;
+            }
+            if (IsDisposed || Disposing || _allowClose) return;
             _progress.Visible = true;
             _progress.Value = Math.Max(0, Math.Min(100, percent));
             SetStatus("安装中 " + percent + "%（" + source + "）");
@@ -861,6 +899,11 @@ namespace StudentAgeModManager
             foreach (Control c in _flow.Controls) (c as ModCard)?.SetBusy(busy);
             if (!busy) _progress.Visible = false;
             if (status != null) SetStatus(status);
+            if (!busy && _closePending && !_allowClose)
+            {
+                _allowClose = true;
+                BeginInvoke(new Action(Close));
+            }
         }
 
         private void SetStatus(string text)

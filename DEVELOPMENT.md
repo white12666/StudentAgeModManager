@@ -105,7 +105,7 @@ Steam 仍可下载作者更新，`seenWorkshopIds` 又会阻止更新或重新�
 
 BepInEx Chainloader 只扫描 `BepInEx/plugins`。普通插件被加载时扫描已经结束，因此 Bridge 必须在 `BepInEx/patchers` 中提前建立目录联接，才能让工坊 DLL 在同一次启动被发现。
 
-Bridge 不修改游戏程序集，`TargetDLLs` 为空；同步工作在 `Initialize()` 中完成。
+Bridge 的 `TargetDLLs` 包含 `Assembly-CSharp.dll`，并在 `Main.OnInit()` 确认 `SteamPlatform.Init()` 成功后重绑 `PathDefine` 的四个静态路径。原版静态字段可能在 Steam 初始化前首次触发，把 `SAVE_PATH` 永久绑定为 `Saves/user`；随后日志虽显示真实 SteamID，`ModCtrl` 仍从错误目录读取 `_mod`，导致游戏“本地”页全部显示关闭。补丁重算 `Saves`、`Saves_Test`、`Images`、`Musics`，不改路径语义；同步工作仍在 `Initialize()` 中完成。
 
 ### 启动流程
 

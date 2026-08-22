@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Mono.Cecil;
+using Mono.Cecil.Cil;
 using StudentAge.WorkshopBridge;
 
 namespace StudentAge.WorkshopBridge.Tests
@@ -34,7 +36,12 @@ namespace StudentAge.WorkshopBridge.Tests
         private static void Run(string tempRoot)
         {
             TestWorkshopLibraryDiscovery(tempRoot);
+            TestPathDefineInitializationPatch();
+            TestAtomicModListSavePatch();
+            TestTransactionSerialization(Path.Combine(tempRoot, "transaction"));
+
             TestWorkshopManagement(Path.Combine(tempRoot, "management"));
+
             var legacyEnv = new AutoTestEnvironment(Path.Combine(tempRoot, "legacy-sync"), 32);
             var gameRoot = legacyEnv.GameRoot;
             var workshopRoot = legacyEnv.WorkshopRoot;
@@ -67,14 +74,25 @@ namespace StudentAge.WorkshopBridge.Tests
             Assert(Directory.Exists(link), "junction should exist");
             Assert((File.GetAttributes(link) & FileAttributes.ReparsePoint) != 0,
                 "bridge path should be a reparse point");
-            Assert(Directory.GetFiles(pluginRoot, "Probe.dll", SearchOption.AllDirectories).Any(),
-                "BepInEx recursive scan should see DLL through the junction");
+            string linkedDll = Path.Combine(link, "ProbeMod", "Probe.dll");
+            Assert(File.Exists(linkedDll),
+                "BepInEx recursive scan should see DLL through the snapshot junction");
+            string sourceDll100 = Path.Combine(workshopRoot, "100", "BepInEx", "plugins",
+                "ProbeMod", "Probe.dll");
+            File.WriteAllText(sourceDll100, "mutated Steam source");
+            Assert(File.ReadAllText(linkedDll) == "test assembly placeholder",
+                "Steam source mutation after sync must not change Bridge snapshot bytes");
 
             var unchanged = WorkshopBridgeSynchronizer.Synchronize(options);
             Assert(unchanged.Synchronized && unchanged.LinkedCount == 0 &&
                    unchanged.RemovedLinkCount == 0 && Directory.Exists(link),
                 "a second synchronization with identical state must preserve the existing " +
                 "junction without reporting filesystem changes");
+            File.WriteAllText(linkedDll, "corrupt cached bytes");
+            var rebuiltSnapshot = WorkshopBridgeSynchronizer.Synchronize(options);
+            Assert(rebuiltSnapshot.Synchronized &&
+                   File.ReadAllText(linkedDll) == "mutated Steam source",
+                "an owned snapshot with corrupt payload must be rebuilt from a stable source generation");
 
             var wrongTarget = Path.Combine(tempRoot, "wrong-link-target");
             Directory.CreateDirectory(wrongTarget);
@@ -203,6 +221,82 @@ namespace StudentAge.WorkshopBridge.Tests
             TestAutoEnableFailClosedState(Path.Combine(tempRoot, "auto-state"));
             TestAutoEnableWriteFailureAndExistingId(Path.Combine(tempRoot, "auto-write"));
         }
+        private static void TestPathDefineInitializationPatch()
+        {
+            string gameAssemblyPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                "..", "..", "..", "..", "..", "..", "StudentAge_Data", "Managed",
+                "Assembly-CSharp.dll"));
+            string managedDirectory = Path.GetDirectoryName(gameAssemblyPath);
+            var resolver = new DefaultAssemblyResolver();
+            resolver.AddSearchDirectory(managedDirectory);
+            resolver.AddSearchDirectory(Path.GetFullPath(Path.Combine(managedDirectory,
+                "..", "..", "..", "BepInEx", "core")));
+            using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(gameAssemblyPath,
+                new ReaderParameters { AssemblyResolver = resolver }))
+            {
+                Assert(WorkshopBridgePatcher.TargetDLLs.SequenceEqual(
+                           new[] { "Assembly-CSharp.dll" }),
+                    "Bridge must patch Assembly-CSharp before PathDefine can bind Saves/user");
+                Assert(WorkshopBridgePatcher.PatchGameSavePathInitialization(assembly),
+                    "the production game assembly should rebind save paths after Steam init");
+
+                MethodDefinition onInit = assembly.MainModule.Types.Single(type =>
+                        type.FullName == "Main").Methods.Single(method =>
+                        method.Name == "OnInit" && method.Parameters.Count == 0);
+                MethodDefinition getUserId = assembly.MainModule.Types.Single(type =>
+                        type.FullName == "Sdk.PlatformAPI.BasePlatform").Methods.Single(method =>
+                        method.Name == "GetUserId" && method.Parameters.Count == 0);
+                int userIdLogIndex = onInit.Body.Instructions.ToList().FindIndex(instruction =>
+                    instruction.OpCode == OpCodes.Ldstr &&
+                    string.Equals(instruction.Operand as string, "UserId:",
+                        StringComparison.Ordinal));
+                Assert(userIdLogIndex >= 0,
+                    "production Main.OnInit should retain its UserId log anchor");
+                Instruction[] prefix = onInit.Body.Instructions.Take(userIdLogIndex).ToArray();
+                int userIdCalls = prefix.Count(instruction =>
+                    (instruction.OpCode == OpCodes.Call || instruction.OpCode == OpCodes.Callvirt) &&
+                    instruction.Operand is MethodReference method &&
+                    method.FullName == getUserId.FullName);
+                Assert(userIdCalls >= 2,
+                    "Main.OnInit must rebind Saves and Saves_Test after SteamPlatform.Init succeeds");
+
+                string[] injectedPaths = prefix.Where(instruction => instruction.OpCode == OpCodes.Ldstr)
+                    .Select(instruction => instruction.Operand as string)
+                    .Where(value => value == "Saves" || value == "Saves_Test" ||
+                                    value == "Images" || value == "Musics").ToArray();
+                Assert(injectedPaths.SequenceEqual(new[]
+                    { "Saves", "Saves_Test", "Images", "Musics" }),
+                    "post-Steam rebinding should preserve all four canonical save/media paths");
+            }
+        }
+        private static void TestTransactionSerialization(string gameRoot)
+        {
+            Directory.CreateDirectory(gameRoot);
+            var acquired = new System.Threading.ManualResetEvent(false);
+            var release = new System.Threading.ManualResetEvent(false);
+            Exception workerError = null;
+            using (WorkshopBridgeTransaction.Acquire(gameRoot))
+            {
+                var worker = new System.Threading.Thread(() =>
+                {
+                    try
+                    {
+                        using (WorkshopBridgeTransaction.Acquire(Path.Combine(gameRoot, ".")))
+                        {
+                            acquired.Set();
+                            release.WaitOne();
+                        }
+                    }
+                    catch (Exception ex) { workerError = ex; acquired.Set(); }
+                });
+                worker.Start();
+                Assert(!acquired.WaitOne(150),
+                    "canonical aliases for one game root must serialize across threads");
+                release.Set();
+            }
+            Assert(acquired.WaitOne(5000) && workerError == null,
+                "waiting Bridge transaction should acquire after the lease is disposed");
+        }
 
         private static void TestWorkshopManagement(string root)
         {
@@ -240,6 +334,15 @@ namespace StudentAge.WorkshopBridge.Tests
             WorkshopManagedItem ordinary = discovery.Items.Single(item => item.WorkshopId == "200");
             Assert(!ordinary.HasBridgeManifest && !ordinary.IsValidBridgePackage,
                 "ordinary JSON subscriptions should be discoverable but not treated as DLL packages");
+            string wrongDiscoveryTarget = Path.Combine(root, "wrong-discovery-target");
+            Directory.CreateDirectory(wrongDiscoveryTarget);
+            Directory.Delete(link, false);
+            CreateJunction(link, wrongDiscoveryTarget);
+            WorkshopManagedItem wrongConnected = WorkshopBridgeManagement.Discover(env.Options)
+                .Items.Single(item => item.WorkshopId == "100");
+            Assert(!wrongConnected.IsConnected,
+                "discovery must reject a Workshop junction that targets another directory");
+            WorkshopBridgeSynchronizer.Synchronize(env.Options);
             WorkshopManagedItem updating = discovery.Items.Single(item => item.WorkshopId == "300");
             Assert(!updating.IsDownloaded && updating.HasBridgeManifest &&
                    updating.IsValidBridgePackage,
@@ -287,6 +390,19 @@ namespace StudentAge.WorkshopBridge.Tests
             Assert(reenabled.Succeeded && reenabled.Changed && Directory.Exists(link) &&
                    CountActiveId(env.ActiveListPath, "100") == 1,
                 "re-enable should use the already updated source and recreate one native ID/link");
+
+            string stateBeforeLockedToggle = File.ReadAllText(env.StatePath);
+            using (var lockedMod = new FileStream(env.ActiveListPath, FileMode.Open,
+                FileAccess.Read, FileShare.Read))
+            {
+                WorkshopToggleResult lockedToggle = WorkshopBridgeManagement.SetEnabled(
+                    env.Options, "100", false);
+                Assert(!lockedToggle.Succeeded,
+                    "a locked _mod must fail the manager toggle without partial success");
+            }
+            Assert(string.Equals(File.ReadAllText(env.StatePath), stateBeforeLockedToggle,
+                    StringComparison.Ordinal),
+                "failed manager _mod commit must restore exact prior Bridge state bytes");
 
             WorkshopToggleResult ordinaryEnable = WorkshopBridgeManagement.SetEnabled(
                 env.Options, "200", true);
@@ -989,12 +1105,60 @@ namespace StudentAge.WorkshopBridge.Tests
                 "\"libraryfolders\"\r\n{\r\n  \"1\"\r\n  {\r\n    \"path\" \"" +
                 escapedLibraryPath + "\"\r\n  }\r\n}\r\n");
 
-            var located = BridgeOptions.ForGame(gameRoot).WorkshopRootPath;
+            envWriteValidMetadata(expectedWorkshopRoot, Path.Combine(secondaryLibrary,
+                "steamapps", "workshop", "appworkshop_" + BridgeOptions.WorkshopAppId + ".acf"));
+            var located = SteamPathLocator.FindWorkshopRoot(gameRoot,
+                includeRegistryCandidates: false);
             Assert(string.Equals(Path.GetFullPath(expectedWorkshopRoot), Path.GetFullPath(located),
                 StringComparison.OrdinalIgnoreCase),
                 "libraryfolders.vdf should locate workshop content in another Steam library");
+
+            var staleLibrary = Path.Combine(tempRoot, "locator-stale");
+            var staleRoot = Path.Combine(staleLibrary, "steamapps", "workshop", "content",
+                BridgeOptions.WorkshopAppId);
+            Directory.CreateDirectory(staleRoot);
+            File.WriteAllText(Path.Combine(primaryLibrary, "steamapps", "libraryfolders.vdf"),
+                "\"libraryfolders\" { \"1\" { \"path\" \"" + escapedLibraryPath +
+                "\" } \"2\" { \"path\" \"" + staleLibrary.Replace("\\", "\\\\") +
+                "\" } }");
+            Assert(string.Equals(Path.GetFullPath(expectedWorkshopRoot),
+                    Path.GetFullPath(SteamPathLocator.FindWorkshopRoot(gameRoot,
+                        includeRegistryCandidates: false)),
+                    StringComparison.OrdinalIgnoreCase),
+                "content without a valid sibling appworkshop ACF must not win library selection");
         }
 
+        private static void envWriteValidMetadata(string workshopRoot, string metadataPath)
+        {
+            Directory.CreateDirectory(workshopRoot);
+            Directory.CreateDirectory(Path.GetDirectoryName(metadataPath));
+            File.WriteAllText(metadataPath,
+                "\"AppWorkshop\" { \"appid\" \"" + BridgeOptions.WorkshopAppId +
+                "\" \"WorkshopItemsInstalled\" { } \"WorkshopItemDetails\" { } }");
+        }
+
+        private static void TestAtomicModListSavePatch()
+        {
+            string gameAssemblyPath = Path.GetFullPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                "..", "..", "..", "..", "..", "..", "StudentAge_Data", "Managed",
+                "Assembly-CSharp.dll"));
+            using (AssemblyDefinition assembly = AssemblyDefinition.ReadAssembly(gameAssemblyPath))
+            {
+                Assert(WorkshopBridgePatcher.PatchAtomicModListSave(assembly),
+                    "production ModCtrl.SaveModList should be structurally patchable");
+                MethodDefinition save = assembly.MainModule.Types.Single(type =>
+                    type.FullName == "ModCtrl").Methods.Single(method =>
+                    method.Name == "SaveModList");
+                MethodReference call = save.Body.Instructions.Select(instruction =>
+                    instruction.Operand as MethodReference).Single(method => method != null &&
+                    method.Name == "AtomicSaveModList");
+                Assert(call.DeclaringType.FullName == typeof(WorkshopBridgePatcher).FullName &&
+                       !save.Body.Instructions.Select(instruction =>
+                           instruction.Operand as MethodReference).Any(method => method != null &&
+                           method.DeclaringType.FullName == "System.IO.StreamWriter"),
+                    "patched SaveModList must replace StreamWriter serialization with the atomic helper");
+            }
+        }
 
         private static void CreateJunction(string junctionPath, string targetPath)
         {

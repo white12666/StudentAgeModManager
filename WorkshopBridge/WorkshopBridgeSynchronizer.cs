@@ -10,6 +10,8 @@ using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
+using System.Threading;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 
@@ -111,15 +113,69 @@ namespace StudentAge.WorkshopBridge
         {
             SubscribedIds = new HashSet<ulong>();
             DownloadedIds = new HashSet<ulong>();
+            InstalledManifests = new Dictionary<ulong, string>();
         }
 
         public HashSet<ulong> SubscribedIds { get; private set; }
         public HashSet<ulong> DownloadedIds { get; private set; }
+        public Dictionary<ulong, string> InstalledManifests { get; private set; }
+    }
+
+    /// <summary>Cross-process lease for all Bridge state belonging to one game root.</summary>
+    public sealed class WorkshopBridgeTransaction : IDisposable
+    {
+        private readonly Mutex _mutex;
+        private bool _ownsMutex;
+
+        private WorkshopBridgeTransaction(Mutex mutex)
+        {
+            _mutex = mutex;
+            _ownsMutex = true;
+        }
+
+        public static WorkshopBridgeTransaction Acquire(string gameRootPath)
+        {
+            if (string.IsNullOrWhiteSpace(gameRootPath))
+                throw new ArgumentException("游戏目录为空。", nameof(gameRootPath));
+            string canonicalRoot = Path.GetFullPath(gameRootPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .ToUpperInvariant();
+            string digest;
+            using (SHA256 sha256 = SHA256.Create())
+                digest = BitConverter.ToString(sha256.ComputeHash(
+                    Encoding.UTF8.GetBytes(canonicalRoot))).Replace("-", string.Empty);
+
+            var mutex = new Mutex(false, @"Local\StudentAge.WorkshopBridge." + digest);
+            bool acquired = false;
+            try
+            {
+                try { acquired = mutex.WaitOne(); }
+                catch (AbandonedMutexException) { acquired = true; }
+                if (!acquired)
+                    throw new InvalidOperationException("无法获取 Workshop Bridge 游戏事务锁。");
+                return new WorkshopBridgeTransaction(mutex);
+            }
+            catch
+            {
+                if (acquired) try { mutex.ReleaseMutex(); } catch { }
+                mutex.Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (!_ownsMutex) return;
+            _ownsMutex = false;
+            try { _mutex.ReleaseMutex(); }
+            finally { _mutex.Dispose(); }
+        }
     }
 
     public static class WorkshopBridgeSynchronizer
     {
         public const string LinkDirectoryName = ".workshop";
+        internal const string CacheDirectoryName = ".workshop-cache";
         private const string WorkshopPluginRelativePath = @"BepInEx\plugins";
         private const string ManifestType = "bepinex-plugin";
         private const string ManifestPluginRoot = "BepInEx/plugins";
@@ -127,11 +183,22 @@ namespace StudentAge.WorkshopBridge
         private const int MaxAutoEnableStateBytes = 1024 * 1024;
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
 
+        public static BridgeResult Synchronize(string gameRootPath)
+        {
+            using (WorkshopBridgeTransaction.Acquire(gameRootPath))
+                return SynchronizeUnderLease(BridgeOptions.ForGame(gameRootPath));
+        }
+
         public static BridgeResult Synchronize(BridgeOptions options)
         {
             if (options == null) throw new ArgumentNullException(nameof(options));
-            var result = new BridgeResult();
+            using (WorkshopBridgeTransaction.Acquire(options.GameRootPath))
+                return SynchronizeUnderLease(options);
+        }
 
+        internal static BridgeResult SynchronizeUnderLease(BridgeOptions options)
+        {
+            var result = new BridgeResult();
             if (string.IsNullOrWhiteSpace(options.PluginRootPath))
             {
                 result.Error("BepInEx 插件目录为空；无法安全停用或同步工坊链接。");
@@ -145,7 +212,10 @@ namespace StudentAge.WorkshopBridge
                     ? BridgeOptions.DefaultMarkerFileName
                     : options.MarkerFileName;
                 if (!string.Equals(markerFileName, Path.GetFileName(markerFileName),
-                    StringComparison.Ordinal) || markerFileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                    StringComparison.Ordinal) || markerFileName.IndexOfAny(
+                        Path.GetInvalidFileNameChars()) >= 0 ||
+                    string.Equals(markerFileName, ".bridge-snapshot",
+                        StringComparison.OrdinalIgnoreCase))
                 {
                     result.Error("DLL 工坊声明文件名无效；不执行同步。");
                     return result;
@@ -311,7 +381,8 @@ namespace StudentAge.WorkshopBridge
                 bool hasDll;
                 try
                 {
-                    hasDll = Directory.GetFiles(sourcePluginRoot, "*.dll", SearchOption.AllDirectories).Length > 0;
+                    hasDll = Directory.GetFiles(sourcePluginRoot, "*.dll",
+                        SearchOption.AllDirectories).Length > 0;
                 }
                 catch (Exception ex)
                 {
@@ -327,12 +398,268 @@ namespace StudentAge.WorkshopBridge
                     continue;
                 }
 
-                desiredLinks.Add(workshopId, Path.GetFullPath(sourcePluginRoot));
+                string snapshotTarget;
+                string snapshotError;
+                if (!TryPublishSnapshot(options, workshopId, sourcePluginRoot,
+                    out snapshotTarget, out snapshotError))
+                {
+                    result.SkippedCount++;
+                    result.Error("无法发布工坊 DLL 不可变快照 " + id + ": " + snapshotError);
+                    continue;
+                }
+                desiredLinks.Add(workshopId, snapshotTarget);
             }
 
             ReconcileDesiredLinks(linkRoot, desiredLinks, result);
+            RemoveStaleSnapshots(options, desiredLinks.Values, result);
             result.Synchronized = true;
             return result;
+        }
+
+        internal static string GetSnapshotPath(BridgeOptions options, ulong workshopId,
+            string manifest)
+        {
+            string cacheRoot = Path.GetFullPath(Path.Combine(
+                Path.GetFullPath(options.GameRootPath), "BepInEx", CacheDirectoryName));
+            return Path.GetFullPath(Path.Combine(cacheRoot,
+                workshopId.ToString(CultureInfo.InvariantCulture), manifest));
+        }
+
+        private static bool TryPublishSnapshot(BridgeOptions options, ulong workshopId,
+            string sourcePluginRoot, out string snapshotPath, out string error)
+        {
+            snapshotPath = null;
+            error = null;
+            string staging = null;
+            try
+            {
+                uint accountId;
+                if (!uint.TryParse(options.ActiveSteamAccountId, NumberStyles.None,
+                    CultureInfo.InvariantCulture, out accountId) || accountId == 0)
+                    throw new InvalidDataException("Steam 用户身份无效。");
+
+                WorkshopSubscriptionSnapshot before;
+                string metadataError;
+                if (!SteamWorkshopMetadata.TryRead(options.WorkshopMetadataPath, accountId,
+                    out before, out metadataError))
+                    throw new InvalidDataException("复制前无法读取 Workshop ACF: " + metadataError);
+                string manifest;
+                if (!before.DownloadedIds.Contains(workshopId) ||
+                    !before.InstalledManifests.TryGetValue(workshopId, out manifest))
+                    throw new InvalidDataException("复制前 Workshop 项目不再是完整下载。");
+
+                snapshotPath = GetSnapshotPath(options, workshopId, manifest);
+                string itemCache = Path.GetDirectoryName(snapshotPath);
+                string cacheRoot = Path.GetDirectoryName(itemCache);
+                EnsureOrdinaryDirectory(Path.Combine(Path.GetFullPath(options.GameRootPath),
+                    "BepInEx"));
+                EnsureOrdinaryDirectory(cacheRoot);
+                EnsureOrdinaryDirectory(itemCache);
+                if (Directory.Exists(snapshotPath))
+                {
+                    bool validExisting = false;
+                    try
+                    {
+                        ValidateSnapshot(snapshotPath, workshopId, manifest);
+                        ValidateCopiedTree(sourcePluginRoot, snapshotPath);
+                        validExisting = true;
+                    }
+                    catch
+                    {
+                        if (!HasExactSnapshotMarker(snapshotPath, workshopId, manifest)) throw;
+                        Directory.Delete(snapshotPath, true);
+                    }
+                    if (validExisting)
+                    {
+                        WorkshopSubscriptionSnapshot existingAfter;
+                        if (!SteamWorkshopMetadata.TryRead(options.WorkshopMetadataPath, accountId,
+                                out existingAfter, out metadataError) ||
+                            !SameGeneration(before, existingAfter))
+                            throw new InvalidDataException(
+                                "验证已有快照期间 Workshop ACF generation 已变化。");
+                        return true;
+                    }
+                }
+                if (File.Exists(snapshotPath) || IsExistingReparsePoint(snapshotPath))
+                    throw new InvalidDataException("快照目标被非 Bridge 项目占用。");
+
+                staging = Path.Combine(itemCache, ".staging-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(staging);
+                CopyPhysicalTree(sourcePluginRoot, staging);
+                ValidateCopiedTree(sourcePluginRoot, staging);
+                File.WriteAllText(Path.Combine(staging, ".bridge-snapshot"),
+                    workshopId.ToString(CultureInfo.InvariantCulture) + "\n" + manifest,
+                    Utf8NoBom);
+
+                WorkshopSubscriptionSnapshot after;
+                if (!SteamWorkshopMetadata.TryRead(options.WorkshopMetadataPath, accountId,
+                    out after, out metadataError))
+                    throw new InvalidDataException("复制后无法读取 Workshop ACF: " + metadataError);
+                if (!SameGeneration(before, after))
+                    throw new InvalidDataException("复制期间 Workshop ACF generation 已变化。");
+
+                Directory.Move(staging, snapshotPath);
+                staging = null;
+                ValidateSnapshot(snapshotPath, workshopId, manifest);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                snapshotPath = null;
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(staging))
+                    try { Directory.Delete(staging, true); } catch { }
+            }
+        }
+
+        private static bool SameGeneration(WorkshopSubscriptionSnapshot left,
+            WorkshopSubscriptionSnapshot right)
+        {
+            return left.SubscribedIds.SetEquals(right.SubscribedIds) &&
+                left.DownloadedIds.SetEquals(right.DownloadedIds) &&
+                left.InstalledManifests.Count == right.InstalledManifests.Count &&
+                left.InstalledManifests.All(pair => right.InstalledManifests.TryGetValue(
+                    pair.Key, out string value) && string.Equals(pair.Value, value,
+                        StringComparison.Ordinal));
+        }
+
+        private static void CopyPhysicalTree(string sourceRoot, string destinationRoot)
+        {
+            sourceRoot = Path.GetFullPath(sourceRoot);
+            if (IsExistingReparsePoint(sourceRoot))
+                throw new InvalidDataException("快照源不能是重解析点。");
+            foreach (string directory in Directory.GetDirectories(sourceRoot, "*",
+                SearchOption.AllDirectories))
+            {
+                if (IsExistingReparsePoint(directory))
+                    throw new InvalidDataException("快照源目录树不能包含重解析点: " + directory);
+                string relative = directory.Substring(sourceRoot.Length).TrimStart(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                Directory.CreateDirectory(Path.Combine(destinationRoot, relative));
+            }
+            foreach (string file in Directory.GetFiles(sourceRoot, "*",
+                SearchOption.AllDirectories))
+            {
+                if (IsExistingReparsePoint(file))
+                    throw new InvalidDataException("快照源不能包含重解析点: " + file);
+                string relative = file.Substring(sourceRoot.Length).TrimStart(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string destination = Path.Combine(destinationRoot, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination));
+                using (var input = new FileStream(file, FileMode.Open, FileAccess.Read,
+                    FileShare.Read))
+                using (var output = new FileStream(destination, FileMode.CreateNew,
+                    FileAccess.Write, FileShare.None))
+                    input.CopyTo(output);
+            }
+        }
+
+        private static void ValidateCopiedTree(string sourceRoot, string snapshotRoot)
+        {
+            string[] sourceFiles = Directory.GetFiles(sourceRoot, "*", SearchOption.AllDirectories)
+                .Select(path => path.Substring(sourceRoot.Length).TrimStart(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+            string[] snapshotFiles = Directory.GetFiles(snapshotRoot, "*", SearchOption.AllDirectories)
+                .Select(path => path.Substring(snapshotRoot.Length).TrimStart(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                .Where(path => !string.Equals(path, ".bridge-snapshot", StringComparison.Ordinal))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToArray();
+            if (!sourceFiles.SequenceEqual(snapshotFiles, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidDataException("复制期间 Workshop 文件集合发生变化。");
+            using (SHA256 sha256 = SHA256.Create())
+            {
+                foreach (string relative in sourceFiles)
+                {
+                    byte[] sourceHash;
+                    byte[] snapshotHash;
+                    using (FileStream source = File.OpenRead(Path.Combine(sourceRoot, relative)))
+                        sourceHash = sha256.ComputeHash(source);
+                    using (FileStream snapshot = File.OpenRead(Path.Combine(snapshotRoot, relative)))
+                        snapshotHash = sha256.ComputeHash(snapshot);
+                    if (!sourceHash.SequenceEqual(snapshotHash))
+                        throw new InvalidDataException("复制期间 Workshop 文件字节发生变化: " + relative);
+                }
+            }
+        }
+
+        private static void ValidateSnapshot(string snapshotPath, ulong workshopId,
+            string manifest)
+        {
+            if (!Directory.Exists(snapshotPath) || IsExistingReparsePoint(snapshotPath))
+                throw new InvalidDataException("快照不是普通目录。");
+            string marker = Path.Combine(snapshotPath, ".bridge-snapshot");
+            string expected = workshopId.ToString(CultureInfo.InvariantCulture) + "\n" + manifest;
+            if (!File.Exists(marker) || IsExistingReparsePoint(marker) ||
+                !string.Equals(File.ReadAllText(marker), expected, StringComparison.Ordinal))
+                throw new InvalidDataException("快照所有权标记无效。");
+        }
+
+        private static bool HasExactSnapshotMarker(string snapshotPath, ulong workshopId,
+            string manifest)
+        {
+            try
+            {
+                string marker = Path.Combine(snapshotPath, ".bridge-snapshot");
+                string expected = workshopId.ToString(CultureInfo.InvariantCulture) + "\n" + manifest;
+                return File.Exists(marker) && !IsExistingReparsePoint(marker) &&
+                    string.Equals(File.ReadAllText(marker), expected, StringComparison.Ordinal);
+            }
+            catch { return false; }
+        }
+
+        private static void EnsureOrdinaryDirectory(string path)
+        {
+            if (File.Exists(path) || IsExistingReparsePoint(path))
+                throw new InvalidDataException("Bridge 缓存路径被文件或重解析点占用: " + path);
+            Directory.CreateDirectory(path);
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("Bridge 缓存目录不能是重解析点: " + path);
+        }
+
+        private static void RemoveStaleSnapshots(BridgeOptions options,
+            IEnumerable<string> desiredSnapshots, BridgeResult result)
+        {
+            string cacheRoot = Path.Combine(Path.GetFullPath(options.GameRootPath), "BepInEx",
+                CacheDirectoryName);
+            if (!Directory.Exists(cacheRoot) || IsExistingReparsePoint(cacheRoot)) return;
+            var desired = new HashSet<string>(desiredSnapshots.Select(Path.GetFullPath),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (string idDirectory in Directory.GetDirectories(cacheRoot))
+            {
+                ulong id;
+                if (IsExistingReparsePoint(idDirectory) || !ulong.TryParse(
+                    Path.GetFileName(idDirectory), NumberStyles.None, CultureInfo.InvariantCulture,
+                    out id) || id == 0 || !string.Equals(Path.GetFileName(idDirectory),
+                    id.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+                    continue;
+                foreach (string snapshot in Directory.GetDirectories(idDirectory))
+                {
+                    if (desired.Contains(Path.GetFullPath(snapshot)) ||
+                        IsExistingReparsePoint(snapshot)) continue;
+                    string snapshotManifest = Path.GetFileName(snapshot);
+                    ulong numericManifest;
+                    if (string.IsNullOrEmpty(snapshotManifest) ||
+                        !ulong.TryParse(snapshotManifest, NumberStyles.None,
+                            CultureInfo.InvariantCulture, out numericManifest) ||
+                        numericManifest == 0 || !string.Equals(snapshotManifest,
+                            numericManifest.ToString(CultureInfo.InvariantCulture),
+                            StringComparison.Ordinal) ||
+                        !HasExactSnapshotMarker(snapshot, id, snapshotManifest)) continue;
+                    try { Directory.Delete(snapshot, true); }
+                    catch (Exception ex) { result.Warning("无法清理旧 Bridge 快照: " + ex.Message); }
+                }
+                try
+                {
+                    if (Directory.GetFileSystemEntries(idDirectory).Length == 0)
+                        Directory.Delete(idDirectory, false);
+                }
+                catch { }
+            }
         }
 
         private static void TryAutoEnableNewItems(BridgeOptions options, string markerFileName,
@@ -744,48 +1071,26 @@ namespace StudentAge.WorkshopBridge
             try
             {
                 path = Path.GetFullPath(path);
-                if (Directory.Exists(path))
-                    throw new InvalidDataException("游戏 Mod 启用列表路径被目录占用。");
-
-                string existing = string.Empty;
-                var activeIds = new HashSet<ulong>();
-                if (File.Exists(path))
+                using (AcquireModListLease(path))
                 {
-                    var attributes = File.GetAttributes(path);
-                    if ((attributes & FileAttributes.ReparsePoint) != 0)
-                        throw new InvalidDataException("游戏 Mod 启用列表不能是重解析点。");
-                    if (new FileInfo(path).Length > MaxAutoEnableStateBytes)
-                        throw new InvalidDataException("游戏 Mod 启用列表超过 1 MiB 限制。");
-                    existing = File.ReadAllText(path);
-                    foreach (var rawLine in existing.Split(new[] { '\r', '\n' },
-                        StringSplitOptions.RemoveEmptyEntries))
-                    {
-                        var line = rawLine.Trim();
-                        ulong existingId;
-                        if (ulong.TryParse(line, NumberStyles.None,
-                            CultureInfo.InvariantCulture, out existingId) && existingId != 0 &&
-                            string.Equals(line, existingId.ToString(CultureInfo.InvariantCulture),
-                                StringComparison.Ordinal))
-                            activeIds.Add(existingId);
-                    }
+                    string existing = ReadModListText(path);
+                    var activeIds = ParseActiveIds(existing);
+                    ulong[] appendIds = ids.Where(id => !activeIds.Contains(id))
+                        .OrderBy(id => id).ToArray();
+                    if (appendIds.Length == 0) return true;
+
+                    var builder = new StringBuilder(existing);
+                    if (builder.Length > 0 && builder[builder.Length - 1] != '\r' &&
+                        builder[builder.Length - 1] != '\n') builder.Append("\r\n");
+                    foreach (ulong id in appendIds)
+                        builder.Append(id.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
+                    byte[] bytes = Utf8NoBom.GetBytes(builder.ToString());
+                    if (bytes.Length > MaxAutoEnableStateBytes)
+                        throw new InvalidDataException("更新后的游戏 Mod 启用列表超过 1 MiB 限制。");
+                    WriteFileAtomically(path, bytes);
+                    addedCount = appendIds.Length;
+                    return true;
                 }
-
-                var appendIds = ids.Where(id => !activeIds.Contains(id)).OrderBy(id => id).ToArray();
-                if (appendIds.Length == 0) return true;
-
-                var builder = new StringBuilder(existing);
-                if (builder.Length > 0 && builder[builder.Length - 1] != '\r' &&
-                    builder[builder.Length - 1] != '\n')
-                    builder.Append("\r\n");
-                foreach (var id in appendIds)
-                    builder.Append(id.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
-
-                byte[] bytes = Utf8NoBom.GetBytes(builder.ToString());
-                if (bytes.Length > MaxAutoEnableStateBytes)
-                    throw new InvalidDataException("更新后的游戏 Mod 启用列表超过 1 MiB 限制。");
-                WriteFileAtomically(path, bytes);
-                addedCount = appendIds.Length;
-                return true;
             }
             catch (Exception ex)
             {
@@ -802,52 +1107,72 @@ namespace StudentAge.WorkshopBridge
             try
             {
                 if (id == 0) throw new ArgumentOutOfRangeException(nameof(id));
-                if (enabled)
-                {
-                    int addedCount;
-                    bool appended = TryAppendActiveIds(path, new HashSet<ulong> { id },
-                        out addedCount, out error);
-                    changed = appended && addedCount > 0;
-                    return appended;
-                }
-
                 path = Path.GetFullPath(path);
-                if (Directory.Exists(path))
-                    throw new InvalidDataException("游戏 Mod 启用列表路径被目录占用。");
-                if (!File.Exists(path)) return true;
-                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                    throw new InvalidDataException("游戏 Mod 启用列表不能是重解析点。");
-                if (new FileInfo(path).Length > MaxAutoEnableStateBytes)
-                    throw new InvalidDataException("游戏 Mod 启用列表超过 1 MiB 限制。");
-
-                string canonicalId = id.ToString(CultureInfo.InvariantCulture);
-                var keptLines = new List<string>();
-                foreach (string rawLine in File.ReadAllLines(path))
+                using (AcquireModListLease(path))
                 {
-                    string line = (rawLine ?? string.Empty).Trim();
-                    if (string.Equals(line, canonicalId, StringComparison.Ordinal))
+                    string existing = ReadModListText(path);
+                    string canonicalId = id.ToString(CultureInfo.InvariantCulture);
+                    var lines = existing.Split(new[] { "\r\n", "\n", "\r" },
+                        StringSplitOptions.None).ToList();
+                    if (lines.Count > 0 && lines[lines.Count - 1].Length == 0)
+                        lines.RemoveAt(lines.Count - 1);
+                    bool contains = lines.Any(line => string.Equals(
+                        (line ?? string.Empty).Trim(), canonicalId, StringComparison.Ordinal));
+                    if (enabled)
                     {
+                        if (contains) return true;
+                        lines.Add(canonicalId);
                         changed = true;
-                        continue;
                     }
-                    keptLines.Add(rawLine ?? string.Empty);
+                    else
+                    {
+                        int removed = lines.RemoveAll(line => string.Equals(
+                            (line ?? string.Empty).Trim(), canonicalId, StringComparison.Ordinal));
+                        if (removed == 0) return true;
+                        changed = true;
+                    }
+                    string text = lines.Count == 0 ? string.Empty :
+                        string.Join("\r\n", lines) + "\r\n";
+                    byte[] bytes = Utf8NoBom.GetBytes(text);
+                    if (bytes.Length > MaxAutoEnableStateBytes)
+                        throw new InvalidDataException("更新后的游戏 Mod 启用列表超过 1 MiB 限制。");
+                    WriteFileAtomically(path, bytes);
+                    return true;
                 }
-                if (!changed) return true;
-
-                string text = keptLines.Count == 0
-                    ? string.Empty
-                    : string.Join("\r\n", keptLines) + "\r\n";
-                byte[] bytes = Utf8NoBom.GetBytes(text);
-                if (bytes.Length > MaxAutoEnableStateBytes)
-                    throw new InvalidDataException("更新后的游戏 Mod 启用列表超过 1 MiB 限制。");
-                WriteFileAtomically(path, bytes);
-                return true;
             }
             catch (Exception ex)
             {
                 error = ex.Message;
                 return false;
             }
+        }
+
+        private static string ReadModListText(string path)
+        {
+            if (Directory.Exists(path))
+                throw new InvalidDataException("游戏 Mod 启用列表路径被目录占用。");
+            if (!File.Exists(path)) return string.Empty;
+            if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("游戏 Mod 启用列表不能是重解析点。");
+            if (new FileInfo(path).Length > MaxAutoEnableStateBytes)
+                throw new InvalidDataException("游戏 Mod 启用列表超过 1 MiB 限制。");
+            return File.ReadAllText(path);
+        }
+
+        private static HashSet<ulong> ParseActiveIds(string text)
+        {
+            var ids = new HashSet<ulong>();
+            foreach (string raw in (text ?? string.Empty).Split(new[] { '\r', '\n' },
+                StringSplitOptions.RemoveEmptyEntries))
+            {
+                string line = raw.Trim();
+                ulong id;
+                if (ulong.TryParse(line, NumberStyles.None, CultureInfo.InvariantCulture,
+                    out id) && id != 0 && string.Equals(line,
+                        id.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal))
+                    ids.Add(id);
+            }
+            return ids;
         }
 
         internal static bool IsExistingReparsePoint(string path)
@@ -889,6 +1214,61 @@ namespace StudentAge.WorkshopBridge
             finally
             {
                 try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
+        }
+
+        internal static IDisposable AcquireModListLease(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                throw new ArgumentException("_mod 路径为空。", nameof(path));
+            path = Path.GetFullPath(path);
+            string mutexName;
+            using (SHA256 sha256 = SHA256.Create())
+                mutexName = @"Local\StudentAge.ModList." + BitConverter.ToString(
+                    sha256.ComputeHash(Encoding.UTF8.GetBytes(path.ToUpperInvariant())))
+                    .Replace("-", string.Empty);
+            var mutex = new Mutex(false, mutexName);
+            try
+            {
+                try { mutex.WaitOne(); }
+                catch (AbandonedMutexException) { }
+                return new MutexLease(mutex);
+            }
+            catch
+            {
+                mutex.Dispose();
+                throw;
+            }
+        }
+
+        internal static void WriteModListAtomicallySerialized(string path, byte[] bytes)
+        {
+            using (AcquireModListLease(path)) WriteFileAtomically(path, bytes);
+        }
+
+        internal static void SaveCompleteModListSerialized(string path,
+            IEnumerable<ulong> activeMods)
+        {
+            using (AcquireModListLease(path))
+            {
+                string contents = string.Join(Environment.NewLine, activeMods.Select(id =>
+                    id.ToString(CultureInfo.InvariantCulture)));
+                if (contents.Length > 0) contents += Environment.NewLine;
+                WriteFileAtomically(path, Utf8NoBom.GetBytes(contents));
+            }
+        }
+
+        private sealed class MutexLease : IDisposable
+        {
+            private Mutex _mutex;
+            public MutexLease(Mutex mutex) { _mutex = mutex; }
+            public void Dispose()
+            {
+                Mutex mutex = _mutex;
+                if (mutex == null) return;
+                _mutex = null;
+                try { mutex.ReleaseMutex(); }
+                finally { mutex.Dispose(); }
             }
         }
 
@@ -1623,6 +2003,7 @@ namespace StudentAge.WorkshopBridge
                     string manifest = SteamVdf.RequireScalar(pair.Value, "manifest");
                     ParseCanonicalNonZeroNumber(manifest, "已安装 manifest");
                     installedManifests.Add(workshopId, manifest);
+                    snapshot.InstalledManifests.Add(workshopId, manifest);
                 }
 
                 string expectedAccountId = accountId.ToString(CultureInfo.InvariantCulture);
@@ -1703,16 +2084,25 @@ namespace StudentAge.WorkshopBridge
 
         public static string FindWorkshopRoot(string gameRootPath)
         {
+            return FindWorkshopRoot(gameRootPath, includeRegistryCandidates: true);
+        }
+
+        internal static string FindWorkshopRoot(string gameRootPath,
+            bool includeRegistryCandidates)
+        {
             var steamAppsCandidates = new List<string>();
             try
             {
                 AddCandidate(steamAppsCandidates, FindGameSteamAppsDirectory(gameRootPath));
-                AddSteamInstallCandidate(steamAppsCandidates,
-                    Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null));
-                AddSteamInstallCandidate(steamAppsCandidates,
-                    Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null));
-                AddSteamInstallCandidate(steamAppsCandidates,
-                    Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam", "InstallPath", null));
+                if (includeRegistryCandidates)
+                {
+                    AddSteamInstallCandidate(steamAppsCandidates,
+                        Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null));
+                    AddSteamInstallCandidate(steamAppsCandidates,
+                        Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null));
+                    AddSteamInstallCandidate(steamAppsCandidates,
+                        Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Valve\Steam", "InstallPath", null));
+                }
             }
             catch
             {
@@ -1749,22 +2139,40 @@ namespace StudentAge.WorkshopBridge
                 }
             }
 
-            string fallback = null;
+            var viableRoots = new List<string>();
             foreach (var steamApps in steamAppsCandidates)
             {
                 try
                 {
-                    var workshopRoot = Path.Combine(steamApps, "workshop", "content",
+                    string workshopRoot = Path.Combine(steamApps, "workshop", "content",
                         BridgeOptions.WorkshopAppId);
-                    if (fallback == null) fallback = workshopRoot;
-                    if (Directory.Exists(workshopRoot)) return workshopRoot;
+                    string metadataPath = Path.Combine(steamApps, "workshop",
+                        "appworkshop_" + BridgeOptions.WorkshopAppId + ".acf");
+                    if (!Directory.Exists(workshopRoot) || !File.Exists(metadataPath) ||
+                        IsReparsePoint(workshopRoot) || IsReparsePoint(metadataPath))
+                        continue;
+                    VdfValue document = SteamVdf.ReadFile(metadataPath, 16 * 1024 * 1024);
+                    VdfValue appWorkshop = SteamVdf.RequireObject(document, "AppWorkshop");
+                    if (!string.Equals(SteamVdf.RequireScalar(appWorkshop, "appid"),
+                        BridgeOptions.WorkshopAppId, StringComparison.Ordinal)) continue;
+                    string canonical = Path.GetFullPath(workshopRoot);
+                    if (!viableRoots.Contains(canonical, StringComparer.OrdinalIgnoreCase))
+                        viableRoots.Add(canonical);
                 }
                 catch
                 {
-                    // Ignore this candidate.
+                    // A stale or malformed content/ACF pair is not viable.
                 }
             }
-            return fallback;
+            if (viableRoots.Count == 1) return viableRoots[0];
+            if (viableRoots.Count > 1)
+                throw new InvalidDataException("检测到多个有效 Steam Workshop 库，无法安全选择。");
+            return null;
+        }
+
+        private static bool IsReparsePoint(string path)
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
         }
 
         public static string FindWorkshopMetadata(string workshopRootPath)
