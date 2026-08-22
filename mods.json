@@ -16,12 +16,6 @@
 	},
 	"mods": [
 		{
-			"id": "LFBetterAudio",
-			"name": "更好的音频效果",
-			"description": "为《学生时代》提供独立于原版音频系统的播放与演出能力",
-			"workshopId": "3763938041"
-		},
-		{
 			"id": "white12666-studentage-editor-plus",
 			"name": "学生时代官方编辑器Plus",
 			"description": "增强游戏自带 Mod 编辑器：剧情图可视化编辑、预览图片、搜索等十余项功能增强；只需Mod作者安装",
@@ -32,6 +26,18 @@
 			"name": "对话支持 LaTeX 公式排版 Mod",
 			"description": "在对话中排版行内公式、矩阵、方程与分段函数",
 			"workshopId": "3786744379"
+		},
+		{
+			"id": "LFBetterAudio",
+			"name": "更好的音频效果",
+			"description": "提供独立于原版音频系统的播放渠道，增强游戏有关音频的演出效果；mod作者和玩家都需要安装",
+			"workshopId": "3763938041"
+		},
+		{		
+			"id": "EC2BUnofficialPatch",
+			"name": "鹅城2班非官方修复补丁",
+			"description": "针对原版部分内容进行修复、优化、扩展；mod作者和玩家都需要安装",
+			"workshopId": "3782171338"
 		}
 	]
 }
